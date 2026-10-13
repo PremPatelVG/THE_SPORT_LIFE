@@ -1,0 +1,202 @@
+{
+  "info": {
+    "name": "Apple Sign-In API",
+    "description": "Complete Apple Sign-In authentication flow for mobile app",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Apple Sign-In (New User)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"identityToken\": \"eyJraWQiOiJlWGF1bm1MIiwiYWxnIjoiUlMyNTYifQ.eyJpc3MiOiJodHRwczovL2FwcGxlaWQuYXBwbGUuY29tIiwiYXVkIjoiY29tLnlvdXJhcHAuYnVuZGxlaWQiLCJleHAiOjE3MzMxNDU2MDAsImlhdCI6MTczMzA1OTIwMCwic3ViIjoiMDAxMjM0LjU2Nzg5MGFiY2RlZi4xMjM0IiwiZW1haWwiOiJ0ZXN0dXNlckBwcml2YXRlcmVsYXkuYXBwbGVpZC5jb20iLCJlbWFpbF92ZXJpZmllZCI6InRydWUifQ.signature\",\n  \"userInfo\": {\n    \"email\": \"testuser@privaterelay.appleid.com\",\n    \"firstName\": \"Test\",\n    \"lastName\": \"User\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/apple",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "v1", "auth", "apple"]
+        },
+        "description": "Authenticate user with Apple identity token. For new users, returns needsProfileCompletion=true. For existing users, returns user data and tokens."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Send OTP",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"phone\": \"+919876543210\",\n  \"purpose\": \"signup\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/send-otp",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "v1", "auth", "send-otp"]
+        },
+        "description": "Send OTP to phone number for verification. Required for new Apple users."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Verify OTP",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"phone\": \"+919876543210\",\n  \"otp\": \"123456\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/verify-otp",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "v1", "auth", "verify-otp"]
+        },
+        "description": "Verify the OTP code sent to the phone number."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Complete Apple Registration (Minimal)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"appleId\": \"001234.567890abcdef.1234\",\n  \"email\": \"testuser@privaterelay.appleid.com\",\n  \"phone\": \"+919876543210\",\n  \"first_name\": \"Test\",\n  \"last_name\": \"User\",\n  \"gender\": \"male\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/complete-apple-registration",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "v1", "auth", "complete-apple-registration"]
+        },
+        "description": "Complete Apple registration with minimal required fields after OTP verification."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Complete Apple Registration (Full)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"appleId\": \"001234.567890abcdef.1234\",\n  \"email\": \"testuser@privaterelay.appleid.com\",\n  \"phone\": \"+919876543210\",\n  \"first_name\": \"Test\",\n  \"last_name\": \"User\",\n  \"gender\": \"male\",\n  \"date_of_birth\": \"1990-01-15\",\n  \"handedness\": \"right\",\n  \"sport_interests\": [\n    {\n      \"sport_id\": 1,\n      \"skill_level\": \"intermediate\"\n    },\n    {\n      \"sport_id\": 3,\n      \"skill_level\": \"beginner\"\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/complete-apple-registration",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "v1", "auth", "complete-apple-registration"]
+        },
+        "description": "Complete Apple registration with all optional fields including sport interests."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Apple Sign-In (Existing User)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"identityToken\": \"eyJraWQiOiJlWGF1bm1MIiwiYWxnIjoiUlMyNTYifQ.eyJpc3MiOiJodHRwczovL2FwcGxlaWQuYXBwbGUuY29tIiwiYXVkIjoiY29tLnlvdXJhcHAuYnVuZGxlaWQiLCJleHAiOjE3MzMxNDU2MDAsImlhdCI6MTczMzA1OTIwMCwic3ViIjoiMDAxMjM0LjU2Nzg5MGFiY2RlZi4xMjM0IiwiZW1haWwiOiJ0ZXN0dXNlckBwcml2YXRlcmVsYXkuYXBwbGVpZC5jb20iLCJlbWFpbF92ZXJpZmllZCI6InRydWUifQ.signature\",\n  \"userInfo\": {\n    \"email\": \"testuser@privaterelay.appleid.com\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/apple",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "v1", "auth", "apple"]
+        },
+        "description": "Test login for existing Apple user. Should return user data and tokens immediately."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.thesportlife",
+      "sha256_cert_fingerprints": [
+        "25:EE:9F:5E:2A:47:C1:39:08:2A:9F:52:DE:AA:E6:C8:1E:14:9D:05:30:0A:70:75:E6:0A:E1:96:6C:57:20:3C"
+      ]
+    }
+  }
+]

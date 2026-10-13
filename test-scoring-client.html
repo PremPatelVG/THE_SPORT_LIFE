@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Scoring Test Client</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        
+        .status.connected {
+            background: #10b981;
+            color: white;
+        }
+        
+        .status.disconnected {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        input, button {
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        button:hover {
+            background: #5568d3;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .scoreboard {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 20px;
+            align-items: center;
+            padding: 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+            color: white;
+            margin-bottom: 20px;
+        }
+        
+        .player {
+            text-align: center;
+        }
+        
+        .player-name {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+        
+        .score {
+            font-size: 3em;
+            font-weight: bold;
+        }
+        
+        .vs {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .period {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 1.1em;
+        }
+        
+        .events {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .event {
+            padding: 10px;
+            border-left: 3px solid #667eea;
+            margin-bottom: 10px;
+            background: #f9fafb;
+            border-radius: 5px;
+        }
+        
+        .event-time {
+            color: #6b7280;
+            font-size: 0.9em;
+        }
+        
+        .event-type {
+            font-weight: bold;
+            color: #667eea;
+            margin: 5px 0;
+        }
+        
+        h2 {
+            color: #1f2937;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .info {
+            background: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Live Scoring Test Client</h1>
+        
+        <div class="card">
+            <div id="status" class="status disconnected">Disconnected</div>
+            
+            <div class="info">
+                <strong>Instructions:</strong>
+                <ol style="margin-left: 20px; margin-top: 10px;">
+                    <li>Enter a Match ID</li>
+                    <li>Click "Connect" to establish WebSocket connection</li>
+                    <li>Click "Join Match" to start receiving updates</li>
+                    <li>Use your API to start match and record events</li>
+                    <li>Watch real-time updates appear below!</li>
+                </ol>
+            </div>
+            
+            <div class="controls">
+                <input type="number" id="matchId" placeholder="Match ID" value="123">
+                <button id="connectBtn" onclick="connect()">Connect</button>
+                <button id="joinBtn" onclick="joinMatch()" disabled>Join Match</button>
+                <button id="leaveBtn" onclick="leaveMatch()" disabled>Leave Match</button>
+                <button id="requestStateBtn" onclick="requestState()" disabled>Request State</button>
+                <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>📊 Live Scoreboard</h2>
+            <div class="scoreboard">
+                <div class="player">
+                    <div class="player-name">Participant 1</div>
+                    <div class="score" id="score1">0</div>
+                </div>
+                <div class="vs">VS</div>
+                <div class="player">
+                    <div class="player-name">Participant 2</div>
+                    <div class="score" id="score2">0</div>
+                </div>
+            </div>
+            <div class="period">
+                Period: <span id="period">-</span> | 
+                Status: <span id="matchStatus">Not Started</span>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>📝 Event Timeline</h2>
+            <div id="events" class="events">
+                <p style="color: #6b7280; text-align: center;">No events yet. Join a match to see live updates.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let currentMatchId = null;
+
+        function updateStatus(connected) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+            statusEl.className = connected ? 'status connected' : 'status disconnected';
+            
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('joinBtn').disabled = !connected;
+            document.getElementById('leaveBtn').disabled = !connected;
+            document.getElementById('requestStateBtn').disabled = !connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+        }
+
+        function connect() {
+            const serverUrl = 'http://localhost:3000/scoring';
+            
+            socket = io(serverUrl, {
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionAttempts: 5
+            });
+
+            socket.on('connect', () => {
+                console.log('Connected to scoring server');
+                updateStatus(true);
+                addEvent('System', 'Connected to server', 'success');
+            });
+
+            socket.on('disconnect', (reason) => {
+                console.log('Disconnected:', reason);
+                updateStatus(false);
+                addEvent('System', `Disconnected: ${reason}`, 'error');
+            });
+
+            socket.on('joined_match', (data) => {
+                console.log('Joined match:', data);
+                addEvent('System', `Joined match ${data.matchId}`, 'success');
+            });
+
+            socket.on('left_match', (data) => {
+                console.log('Left match:', data);
+                addEvent('System', `Left match ${data.matchId}`, 'info');
+            });
+
+            socket.on('match_started', (data) => {
+                console.log('Match started:', data);
+                updateScoreboard(data.liveState);
+                addEvent('Match Started', `Match ${data.matchId} has started`, 'success');
+            });
+
+            socket.on('match_update', (data) => {
+                console.log('Match update:', data);
+                updateScoreboard(data.data);
+                addEvent('Score Update', `Event: ${data.eventType}`, 'info');
+            });
+
+            socket.on('match_completed', (data) => {
+                console.log('Match completed:', data);
+                addEvent('Match Completed', `Winner: Participant ${data.winnerParticipantId}`, 'success');
+                document.getElementById('matchStatus').textContent = 'Completed';
+            });
+
+            socket.on('match_state', (data) => {
+                console.log('Match state:', data);
+                updateScoreboard(data.liveState);
+                addEvent('State Received', 'Current match state loaded', 'info');
+            });
+
+            socket.on('error', (data) => {
+                console.error('Socket error:', data);
+                addEvent('Error', data.message || 'Unknown error', 'error');
+            });
+
+            socket.on('pong', (data) => {
+                console.log('Pong received:', data);
+            });
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.close();
+                socket = null;
+                updateStatus(false);
+            }
+        }
+
+        function joinMatch() {
+            const matchId = document.getElementById('matchId').value;
+            if (!matchId) {
+                alert('Please enter a Match ID');
+                return;
+            }
+            
+            currentMatchId = matchId;
+            socket.emit('join_match', parseInt(matchId));
+        }
+
+        function leaveMatch() {
+            if (currentMatchId) {
+                socket.emit('leave_match', parseInt(currentMatchId));
+                currentMatchId = null;
+            }
+        }
+
+        function requestState() {
+            const matchId = document.getElementById('matchId').value;
+            if (!matchId) {
+                alert('Please enter a Match ID');
+                return;
+            }
+            
+            socket.emit('request_match_state', parseInt(matchId));
+        }
+
+        function updateScoreboard(liveState) {
+            if (!liveState) return;
+            
+            document.getElementById('score1').textContent = liveState.participant1_score || 0;
+            document.getElementById('score2').textContent = liveState.participant2_score || 0;
+            document.getElementById('period').textContent = liveState.current_period || '-';
+            document.getElementById('matchStatus').textContent = liveState.is_live ? 'Live' : 'Not Live';
+        }
+
+        function addEvent(type, message, category = 'info') {
+            const eventsContainer = document.getElementById('events');
+            
+            // Remove placeholder if exists
+            if (eventsContainer.children.length === 1 && eventsContainer.children[0].tagName === 'P') {
+                eventsContainer.innerHTML = '';
+            }
+            
+            const eventEl = document.createElement('div');
+            eventEl.className = 'event';
+            eventEl.innerHTML = `
+                <div class="event-time">${new Date().toLocaleTimeString()}</div>
+                <div class="event-type">${type}</div>
+                <div>${message}</div>
+            `;
+            
+            eventsContainer.insertBefore(eventEl, eventsContainer.firstChild);
+            
+            // Keep only last 50 events
+            while (eventsContainer.children.length > 50) {
+                eventsContainer.removeChild(eventsContainer.lastChild);
+            }
+        }
+
+        // Auto-connect on page load
+        window.addEventListener('load', () => {
+            console.log('Page loaded. Click Connect to start.');
+        });
+    </script>
+</body>
+</html>
