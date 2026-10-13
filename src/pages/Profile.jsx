@@ -1,0 +1,838 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import toast from 'react-hot-toast';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import '../styles/datepicker-custom.css';
+import { fetchProfile, updateProfile, clearError, clearSuccess } from '../store/slices/userSlice';
+import { setUser, logout } from '../store/slices/authSlice';
+import { formatDate } from '../utils/dateFormatter';
+import { 
+  User, 
+  Mail, 
+  Phone, 
+  Calendar, 
+  ArrowLeft,
+  Save,
+  AlertCircle,
+  CheckCircle,
+  UserCircle,
+  Shield,
+  Settings,
+  Trophy,
+  Clock,
+  Camera,
+  Upload,
+  Award,
+  Dumbbell,
+  Trash2,
+  X,
+  UserX
+} from 'lucide-react';
+import apiClient from '../config/api';
+
+const Profile = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { profile, loading, error, success } = useSelector((state) => state.user);
+  
+  const [formData, setFormData] = useState({
+    first_name: '',
+    last_name: '',
+    email: '',
+    phone: '',
+    gender: '',
+    date_of_birth: '',
+    handedness: '',
+  });
+
+  const [sports, setSports] = useState([]);
+  const [loadingSports, setLoadingSports] = useState(true);
+  const [sportInterests, setSportInterests] = useState([]); // Array of {sport_id, skill_level}
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [profileImagePreview, setProfileImagePreview] = useState(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+
+  useEffect(() => {
+    dispatch(fetchProfile());
+    fetchSports();
+  }, [dispatch]);
+
+  const fetchSports = async () => {
+    try {
+      const response = await apiClient.get('/sports');
+      if (response.data.success) {
+        setSports(response.data.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch sports:', error);
+    } finally {
+      setLoadingSports(false);
+    }
+  };
+
+  useEffect(() => {
+    if (profile) {
+      setFormData({
+        first_name: profile.first_name || '',
+        last_name: profile.last_name || '',
+        email: profile.email || '',
+        phone: profile.phone || '',
+        gender: profile.gender || '',
+        date_of_birth: profile.date_of_birth ? profile.date_of_birth.split('T')[0] : '',
+        handedness: profile.handedness || '',
+      });
+      // Set user's current sport interests with skill levels
+      if (profile.sports && Array.isArray(profile.sports)) {
+        setSportInterests(profile.sports.map(s => ({
+          sport_id: s.id,
+          skill_level: s.skill_level || 'beginner'
+        })));
+      }
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+      dispatch(clearSuccess());
+    };
+  }, [dispatch]);
+
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+    dispatch(clearError());
+    dispatch(clearSuccess());
+  };
+
+  const handleSportToggle = (sportId) => {
+    setSportInterests(prev => {
+      const isSelected = prev.find(s => s.sport_id === sportId);
+      if (isSelected) {
+        // Remove sport
+        return prev.filter(s => s.sport_id !== sportId);
+      } else {
+        // Add sport with default beginner level
+        return [...prev, { sport_id: sportId, skill_level: 'beginner' }];
+      }
+    });
+  };
+
+  const handleSkillLevelChange = (sportId, skillLevel) => {
+    setSportInterests(prev => 
+      prev.map(s => 
+        s.sport_id === sportId ? { ...s, skill_level: skillLevel } : s
+      )
+    );
+  };
+
+  const handleProfileImageChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select an image file');
+      return;
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image size must be less than 5MB');
+      return;
+    }
+
+    // Show preview
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setProfileImagePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+
+    // Upload image
+    setUploadingImage(true);
+    const formData = new FormData();
+    formData.append('profile_image', file);
+
+    try {
+      const response = await apiClient.post('/auth/profile/picture', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      if (response.data.success) {
+        toast.success('Profile picture updated successfully!');
+        // Refresh profile to get updated image
+        dispatch(fetchProfile());
+      }
+    } catch (error) {
+      console.error('Profile picture upload error:', error);
+      toast.error(error.response?.data?.error || 'Failed to upload profile picture');
+      setProfileImagePreview(null);
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleDeleteProfilePicture = async () => {
+    if (!window.confirm('Are you sure you want to remove your profile picture?')) {
+      return;
+    }
+
+    setUploadingImage(true);
+    try {
+      const response = await apiClient.delete('/auth/profile/picture');
+
+      if (response.data.success) {
+        toast.success('Profile picture removed successfully!');
+        setProfileImagePreview(null);
+        // Refresh profile to get updated data
+        dispatch(fetchProfile());
+      }
+    } catch (error) {
+      console.error('Profile picture delete error:', error);
+      toast.error(error.response?.data?.error || 'Failed to remove profile picture');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Update profile data
+    const result = await dispatch(updateProfile(formData));
+    
+    if (updateProfile.fulfilled.match(result)) {
+      // Update sport interests
+      try {
+        await apiClient.put('/auth/profile/sports', {
+          sport_interests: sportInterests
+        }, {
+          validate: {
+            body: {
+              'sport_interests.*.skill_level': {
+                optional: true,
+                isIn: ['beginner', 'intermediate', 'advanced', 'professional'],
+                errorMessage: 'Skill level must be beginner, intermediate, advanced, or professional'
+              }
+            }
+          }
+        });
+        
+        // Update Redux auth state with new user data
+        dispatch(setUser(result.payload));
+        
+        // Update localStorage with new user data
+        localStorage.setItem('user', JSON.stringify(result.payload));
+        
+        toast.success('Profile updated successfully!');
+        
+        // Refresh profile to get updated data including sports
+        await dispatch(fetchProfile());
+        
+      } catch (error) {
+        console.error('Sport interests update error:', error);
+        toast.error('Profile updated but failed to update sport interests');
+        
+        // Still update the user data even if sports update fails
+        dispatch(setUser(result.payload));
+        localStorage.setItem('user', JSON.stringify(result.payload));
+        await dispatch(fetchProfile());
+      }
+    } else if (updateProfile.rejected.match(result)) {
+      const errorMessage = result.payload || result.error?.message || 'Failed to update profile';
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== 'DELETE') {
+      toast.error('Please type DELETE to confirm');
+      return;
+    }
+
+    setDeletingAccount(true);
+    try {
+      const response = await apiClient.delete('/auth/account');
+      
+      if (response.data.success) {
+        toast.success(response.data.message || 'Account deleted successfully');
+        
+        // Clear all local storage and logout
+        localStorage.clear();
+        dispatch(logout());
+        
+        // Redirect to home page
+        setTimeout(() => {
+          navigate('/', { replace: true });
+        }, 1500);
+      }
+    } catch (error) {
+      console.error('Delete account error:', error);
+      toast.error(error.response?.data?.error || 'Failed to delete account');
+      setDeletingAccount(false);
+    }
+  };
+
+  if (loading && !profile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary-200 border-t-primary-500 mx-auto mb-4"></div>
+          <p className="text-gray-600 font-medium">Loading profile...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+      {/* Header */}
+      <header className="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => navigate('/dashboard')}
+                className="p-2 hover:bg-primary-50 rounded-xl transition-all duration-200 hover:scale-105 group"
+              >
+                <ArrowLeft className="w-5 h-5 text-gray-600 group-hover:text-primary-500 transition-colors" />
+              </button>
+              <div>
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-primary-500 to-primary-600 bg-clip-text text-transparent">
+                  Edit Profile
+                </h1>
+                <p className="text-sm text-gray-600">Update your personal information</p>
+              </div>
+            </div>
+            
+            {/* Profile Avatar */}
+            <div className="hidden sm:flex items-center gap-3">
+              <div className="text-right">
+                <p className="text-sm font-semibold text-gray-900">
+                  {profile?.first_name} {profile?.last_name}
+                </p>
+                <p className="text-xs text-gray-500">{profile?.email}</p>
+              </div>
+              <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-lg">
+                {profile?.first_name?.[0]}{profile?.last_name?.[0]}
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Left Sidebar - Profile Summary */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* Profile Card */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+              <div className="text-center">
+                <div className="relative inline-block mb-4">
+                  {profileImagePreview || profile?.profile_image ? (
+                    <img
+                      src={profileImagePreview || `${import.meta.env.VITE_API_URL}${profile?.profile_image}`}
+                      alt="Profile"
+                      className="w-30 h-30 rounded-full object-cover shadow-xl"
+                    />
+                  ) : (
+                    <div className="w-30 h-30 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center text-white font-bold text-3xl shadow-xl">
+                      {profile?.first_name?.[0]}{profile?.last_name?.[0]}
+                    </div>
+                  )}
+                  
+                  {/* Action Buttons - Side by Side */}
+                  <div className="absolute bottom-0 right-0 flex" style={{ gap: '1px' }}>
+                    {/* Upload Button */}
+                    <label
+                      htmlFor="profile-image-upload"
+                      className="bg-primary-500 hover:bg-primary-600 text-white p-2 rounded-full cursor-pointer shadow-lg transition-all"
+                    >
+                      {uploadingImage ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        <Camera className="w-4 h-4" />
+                      )}
+                    </label>
+                    <input
+                      id="profile-image-upload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfileImageChange}
+                      className="hidden"
+                      disabled={uploadingImage}
+                    />
+                    
+                    {/* Delete Button - Only show if profile image exists */}
+                    {(profile?.profile_image || profileImagePreview) && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteProfilePicture}
+                        disabled={uploadingImage}
+                        className="bg-red-600 hover:bg-red-700 text-white p-2 rounded-full cursor-pointer shadow-lg transition-all disabled:opacity-50"
+                        title="Remove profile picture"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <h3 className="text-xl font-bold text-gray-900 mb-1">
+                  {profile?.first_name} {profile?.last_name}
+                </h3>
+                <p className="text-sm text-gray-500 mb-4">{profile?.email}</p>
+                <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary-50 text-primary-700 rounded-full text-xs font-semibold">
+                  <Shield className="w-3 h-3" />
+                  {profile?.role || 'User'}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Stats */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+              <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Settings className="w-5 h-5 text-primary-500" />
+                Account Info
+              </h4>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-sm text-gray-600">Member Since</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {formatDate(profile?.created_at)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-sm text-gray-600">Profile Status</span>
+                  <span className="text-sm font-semibold text-primary-500">Active</span>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-sm text-gray-600">Last Updated</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {formatDate(profile?.updated_at)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Content - Edit Form */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-2xl shadow-lg border border-gray-100">
+              <form onSubmit={handleSubmit} className="p-8 space-y-8">
+                {/* Success Alert */}
+                {/* {success && (
+                  <div className="bg-primary-50 border-l-4 border-primary-500 text-primary-700 px-4 py-3 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="font-semibold text-sm">Success!</p>
+                      <p className="text-sm">{success}</p>
+                    </div>
+                  </div>
+                )} */}
+
+                {/* Error Alert */}
+                {error && (
+                  <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="font-semibold text-sm">Error</p>
+                      <p className="text-sm">{error}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Personal Information */}
+                <div>
+                  <div className="flex items-center gap-2 mb-6">
+                    <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
+                      <UserCircle className="w-5 h-5 text-primary-500" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-900">Personal Information</h3>
+                      <p className="text-xs text-gray-500">Your profile details</p>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-5">
+                    {/* First Name & Last Name */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* First Name */}
+                      <div>
+                        <label htmlFor="first_name" className="block text-sm font-semibold text-gray-700 mb-2">
+                          First Name <span className="text-red-500">*</span>
+                        </label>
+                        <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <User className="h-5 w-5 text-gray-400 group-focus-within:text-primary-500 transition-colors" />
+                          </div>
+                          <input
+                            id="first_name"
+                            name="first_name"
+                            type="text"
+                            required
+                            value={formData.first_name}
+                            onChange={handleChange}
+                            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none"
+                            placeholder="John"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Last Name */}
+                      <div>
+                        <label htmlFor="last_name" className="block text-sm font-semibold text-gray-700 mb-2">
+                          Last Name <span className="text-red-500">*</span>
+                        </label>
+                        <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <User className="h-5 w-5 text-gray-400 group-focus-within:text-primary-500 transition-colors" />
+                          </div>
+                          <input
+                            id="last_name"
+                            name="last_name"
+                            type="text"
+                            required
+                            value={formData.last_name}
+                            onChange={handleChange}
+                            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none"
+                            placeholder="Doe"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Email & Phone */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* Email */}
+                      <div>
+                        <label htmlFor="email" className="block text-sm font-semibold text-gray-700 mb-2">
+                          Email Address
+                        </label>
+                        <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Mail className="h-5 w-5 text-gray-400 group-focus-within:text-primary-500 transition-colors" />
+                          </div>
+                          <input
+                            id="email"
+                            name="email"
+                            type="email"
+                            value={formData.email}
+                            onChange={handleChange}
+                            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none"
+                            placeholder="your.email@example.com"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Phone */}
+                      <div>
+                        <label htmlFor="phone" className="block text-sm font-semibold text-gray-700 mb-2">
+                          Phone Number
+                        </label>
+                        <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Phone className="h-5 w-5 text-gray-400" />
+                          </div>
+                          <input
+                            id="phone"
+                            name="phone"
+                            type="tel"
+                            value={formData.phone}
+                            readOnly
+                            disabled
+                            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+                            placeholder="+91 1234567890"
+                          />
+                        </div>
+                        {/* <p className="text-xs text-gray-500 mt-1">Phone number cannot be changed</p> */}
+                      </div>
+                    </div>
+
+                    {/* Gender, Date of Birth & Handedness */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                      {/* Gender */}
+                      <div>
+                        <label htmlFor="gender" className="block text-sm font-semibold text-gray-700 mb-2">
+                          Gender
+                        </label>
+                        <select
+                          id="gender"
+                          name="gender"
+                          value={formData.gender}
+                          onChange={handleChange}
+                          className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none bg-white"
+                        >
+                          <option value="">Select Gender</option>
+                          <option value="male">Male</option>
+                          <option value="female">Female</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+
+                      {/* Date of Birth */}
+                      <div>
+                        <label htmlFor="date_of_birth" className="block text-sm font-semibold text-gray-700 mb-2">
+                          Date of Birth
+                        </label>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none z-10">
+                            <Calendar className="h-5 w-5 text-gray-400" />
+                          </div>
+                          <DatePicker
+                            selected={formData.date_of_birth ? new Date(formData.date_of_birth) : null}
+                            onChange={(date) => {
+                              if (date) {
+                                setFormData({ ...formData, date_of_birth: date.toISOString().split('T')[0] });
+                              } else {
+                                setFormData({ ...formData, date_of_birth: '' });
+                              }
+                            }}
+                            dateFormat="dd/MM/yyyy"
+                            placeholderText="Select date"
+                            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none"
+                            maxDate={new Date()}
+                            showYearDropdown
+                            scrollableYearDropdown
+                            yearDropdownItemNumber={100}
+                            showMonthDropdown
+                          />
+                        </div>
+                        {/* <p className="text-xs text-gray-500 mt-1">Format: DD/MM/YYYY</p> */}
+                      </div>
+
+                      {/* Handedness */}
+                      <div>
+                        <label htmlFor="handedness" className="block text-sm font-semibold text-gray-700 mb-2">
+                          Handedness
+                        </label>
+                        <select
+                          id="handedness"
+                          name="handedness"
+                          value={formData.handedness}
+                          onChange={handleChange}
+                          className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none bg-white"
+                        >
+                          <option value="">Select</option>
+                          <option value="right">Right</option>
+                          <option value="left">Left</option>
+                          <option value="ambidextrous">Ambidextrous</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sport Interests */}
+                <div className="pt-6 border-t border-gray-100">
+                  <div className="flex items-center gap-2 mb-6">
+                    <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
+                      <Dumbbell className="w-5 h-5 text-primary-500" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-900">Sport Interests</h3>
+                      <p className="text-xs text-gray-500">Select sports and your skill level</p>
+                    </div>
+                  </div>
+
+                  {loadingSports ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary-500 border-t-transparent"></div>
+                    </div>
+                  ) : (
+                    <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-primary-500 scrollbar-track-gray-200">
+                      <div className="space-y-3">
+                        {sports.map((sport) => {
+                          const selectedSport = sportInterests.find(s => s.sport_id === sport.id);
+                          const isSelected = !!selectedSport;
+                          
+                          return (
+                            <div
+                              key={sport.id}
+                              className={`bg-white border-2 rounded-lg p-3 transition-all duration-200 ${
+                                isSelected 
+                                  ? 'border-primary-500 bg-primary-50' 
+                                  : 'border-gray-200 hover:border-primary-300'
+                              }`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => handleSportToggle(sport.id)}
+                                  className="w-4 h-4 mt-1 text-primary-500 border-gray-300 rounded focus:ring-primary-500 focus:ring-2 cursor-pointer flex-shrink-0"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div>
+                                      <div className="font-semibold text-gray-900 text-sm">{sport.name}</div>
+                                      <div className="text-xs text-gray-500 capitalize">{sport.category}</div>
+                                    </div>
+                                  </div>
+                                  
+                                  {isSelected && (
+                                    <div className="mt-2">
+                                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                                        Skill Level
+                                      </label>
+                                      <div className="flex gap-2">
+                                        {['beginner', 'intermediate', 'advanced', 'professional'].map((level) => (
+                                          <button
+                                            key={level}
+                                            type="button"
+                                            onClick={() => handleSkillLevelChange(sport.id, level)}
+                                            className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                                              selectedSport.skill_level === level
+                                                ? 'bg-primary-500 text-white shadow-sm'
+                                                : 'bg-white text-gray-700 border border-gray-300 hover:border-primary-500 hover:bg-primary-50'
+                                            }`}
+                                          >
+                                            {level.charAt(0).toUpperCase() + level.slice(1)}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {!loadingSports && sports.length > 6 && (
+                    <p className="text-xs text-gray-400 mt-1 italic">Scroll to see more sports</p>
+                  )}
+                </div>
+
+                {/* Danger Zone - Delete Account */}
+                <div className="pt-6 border-t border-red-200">
+                  <div className="flex items-center gap-2 mb-6">
+                    <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
+                      <UserX className="w-5 h-5 text-red-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-red-900">Danger Zone</h3>
+                      <p className="text-xs text-red-600">Irreversible actions</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-red-50 border-2 border-red-200 rounded-lg p-6">
+                    <div className="flex items-start gap-3 mb-4">
+                      <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="font-semibold text-red-900 mb-2">Delete Account</h4>
+                        <p className="text-sm text-red-700 mb-3">
+                          Once you delete your account, there is no going back. This will permanently delete your profile, 
+                          tournament history, and all associated data.
+                        </p>
+                      </div>
+                    </div>
+
+                    {!showDeleteConfirm ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowDeleteConfirm(true)}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition-all duration-200 flex items-center gap-2"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete My Account
+                      </button>
+                    ) : (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-semibold text-red-900 mb-2">
+                            Type <span className="font-mono bg-red-200 px-2 py-0.5 rounded">DELETE</span> to confirm
+                          </label>
+                          <input
+                            type="text"
+                            value={deleteConfirmText}
+                            onChange={(e) => setDeleteConfirmText(e.target.value)}
+                            placeholder="Type DELETE"
+                            className="w-full px-4 py-2.5 border-2 border-red-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all outline-none"
+                            disabled={deletingAccount}
+                          />
+                        </div>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowDeleteConfirm(false);
+                              setDeleteConfirmText('');
+                            }}
+                            disabled={deletingAccount}
+                            className="px-4 py-2 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all duration-200 disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleDeleteAccount}
+                            disabled={deletingAccount || deleteConfirmText !== 'DELETE'}
+                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                          >
+                            {deletingAccount ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                                Deleting...
+                              </>
+                            ) : (
+                              <>
+                                <Trash2 className="w-4 h-4" />
+                                Permanently Delete Account
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-6 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/dashboard')}
+                    className="w-full sm:w-auto px-6 py-2.5 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all duration-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-teal-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-5 h-5" />
+                        Save Changes
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Profile;

@@ -1,0 +1,2914 @@
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import Navbar from '../components/Navbar';
+import {
+  Play,
+  Pause,
+  Square,
+  Plus,
+  RotateCcw,
+  Clock,
+  MapPin,
+  Trophy,
+  Users,
+  AlertCircle,
+  Loader,
+  Zap,
+  CheckCircle
+} from 'lucide-react';
+import api from '../config/api';
+import { io } from 'socket.io-client';
+import FootballScoringInterface from '../components/scoring/FootballScoringInterface';
+import SetBasedScoringInterface from '../components/scoring/SetBasedScoringInterface';
+import GameBasedScoringInterface from '../components/scoring/GameBasedScoringInterface';
+import * as matchTimingService from '../services/matchTimingService';
+import SquadSelectionModal from '../components/SquadSelectionModal';
+import * as matchSquadService from '../services/matchSquadService';
+
+const RefereeLiveScoring = () => {
+  const { matchId } = useParams();
+  
+  /**
+   * Helper function to determine segment type and number from liveScore
+   * Properly handles both set-based and game-based sports
+   */
+  const getSegmentInfo = (liveScore) => {
+    // Time-based sports (Football, Basketball, Hockey)
+    if (liveScore.current_half) {
+      return {
+        type: 'half',
+        number: liveScore.current_half
+      };
+    }
+    
+    // Game-based sports (Badminton, Table Tennis, Squash, Pickleball, Volleyball)
+    if (liveScore.current_game) {
+      return {
+        type: 'game',
+        number: liveScore.current_game
+      };
+    }
+    
+    // Set-based sports (Tennis, Padel)
+    if (liveScore.current_set) {
+      return {
+        type: 'set',
+        number: liveScore.current_set
+      };
+    }
+    
+    // Fallback
+    return {
+      type: 'game',
+      number: 1
+    };
+  };
+  const navigate = useNavigate();
+  const { user } = useSelector((state) => state.auth);
+
+  const [match, setMatch] = useState(null);
+  const [sport, setSport] = useState(null);
+  const [liveScore, setLiveScore] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [matchStatus, setMatchStatus] = useState('scheduled');
+  const [socket, setSocket] = useState(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showEndMatchModal, setShowEndMatchModal] = useState(false);
+  const [matchTimer, setMatchTimer] = useState(0); // Timer in seconds
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [currentHalf, setCurrentHalf] = useState(1);
+  const [isOnBreak, setIsOnBreak] = useState(false);
+  const [autoHalfTransition, setAutoHalfTransition] = useState(true); // Toggle auto/manual
+  const [periodDuration, setPeriodDuration] = useState(45); // Period duration in minutes (for Football)
+  
+  // Draw decision states
+  const [showDrawDecisionModal, setShowDrawDecisionModal] = useState(false);
+  const [extraTimeMinutes, setExtraTimeMinutes] = useState(30);
+  
+  // Squad selection states
+  const [showSquadModal, setShowSquadModal] = useState(false);
+  const [currentSquadTeam, setCurrentSquadTeam] = useState(null);
+  
+  // Server selection states
+  const [showServerSelectionModal, setShowServerSelectionModal] = useState(false);
+  const [selectedFirstServer, setSelectedFirstServer] = useState(null);
+
+  /**
+   * Convert numeric points to Tennis/Padel format (ONLY for Tennis/Padel)
+   * Regular game: 0 → '0', 1 → '15', 2 → '30', 3 → '40', 4+ → 'Adv'
+   * Tiebreak: 0 → '0', 1 → '1', 2 → '2', etc. (numeric)
+   */
+  const convertToTennisScore = (points, opponentPoints, isTiebreak = false) => {
+    if (typeof points !== 'number') {
+      // Already in string format
+      return points;
+    }
+
+    // In tiebreak mode, use numeric scoring
+    if (isTiebreak) {
+      return points.toString();
+    }
+
+    const scores = ['0', '15', '30', '40'];
+    
+    // Handle deuce and advantage scenarios (regular game only)
+    if (points >= 3 && opponentPoints >= 3) {
+      if (points === opponentPoints) {
+        return '40'; // Deuce
+      } else if (points > opponentPoints) {
+        return 'Adv'; // Advantage
+      } else {
+        return '40'; // Opponent has advantage
+      }
+    }
+    
+    // Normal scoring
+    if (points < 4) {
+      return scores[points];
+    }
+    
+    // If points >= 4 and opponent < 3, game should be won already
+    return '40'; // Fallback
+  };
+  const [squadStatus, setSquadStatus] = useState({ team1_squad_set: false, team2_squad_set: false, both_squads_set: false });
+  
+  // Use ref to track latest timer value for persistence
+  const matchTimerRef = useRef(0);
+  const currentHalfRef = useRef(1);
+  
+  // Update refs when state changes
+  useEffect(() => {
+    matchTimerRef.current = matchTimer;
+    currentHalfRef.current = currentHalf;
+  }, [matchTimer, currentHalf]);
+
+  useEffect(() => {
+    fetchMatchData();
+    connectWebSocket();
+    
+    return () => {
+      if (socket) {
+        socket.disconnect();
+        console.log('🔌 WebSocket disconnected');
+      }
+    };
+  }, [matchId]);
+  
+  // WebSocket connection for real-time updates
+  const connectWebSocket = () => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    const newSocket = io(`${API_URL}/scoring`, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5
+    });
+    
+    newSocket.on('connect', () => {
+      console.log('✅ Scoreboard WebSocket connected');
+      newSocket.emit('join_match', matchId);
+      console.log('📡 Joined match room:', matchId);
+    });
+    
+    // Listen for match updates (timer, half changes, break)
+    newSocket.on('match_update', async (data) => {
+      console.log('🔄 Real-time match update:----', data);
+      
+      // Convert matchId to string for comparison
+      if (String(data.matchId) === String(matchId)) {
+        // Update live score if present (handle both liveScore and live_score)
+        const updatedLiveScore = data.data?.liveScore || data.data?.live_score;
+        if (updatedLiveScore) {
+          setLiveScore(updatedLiveScore);
+          
+          // Update current half, break status, and paused status instantly
+          if (updatedLiveScore.current_half !== undefined) {
+            setCurrentHalf(updatedLiveScore.current_half);
+          }
+          if (updatedLiveScore.is_on_break !== undefined) {
+            setIsOnBreak(updatedLiveScore.is_on_break);
+          }
+          if (updatedLiveScore.is_paused !== undefined) {
+            setIsPaused(updatedLiveScore.is_paused);
+            setTimerRunning(!updatedLiveScore.is_paused);
+          }
+          
+          // Check if match completed
+          if (updatedLiveScore.match_complete) {
+            console.log('🏁 Match completed via WebSocket!');
+            setMatchStatus('completed');
+            setTimerRunning(false);
+            
+            const winnerName = updatedLiveScore.match_winner === 'participant1' 
+              ? match?.participant1_name 
+              : match?.participant2_name;
+            
+            alert(`🏆 Match Complete!\\n\\nWinner: ${winnerName || updatedLiveScore.match_winner}`);
+          }
+          
+          console.log('✅ Scoreboard updated instantly - Half:', updatedLiveScore.current_half, 'Break:', updatedLiveScore.is_on_break);
+        }
+        
+        // Handle events via WebSocket - NO API CALLS!
+        const eventTypesToHandle = ['goal', 'yellow_card', 'red_card', 'substitution', 'penalty_kick', 'match_started', 'match_completed', 'half_ended', 'break_started', 'break_ended'];
+        if (data.eventType && eventTypesToHandle.includes(data.eventType)) {
+          // Add event to list from WebSocket data (no API call needed!)
+          if (data.data?.event_id) {
+            const newEvent = {
+              id: data.data.event_id,
+              event_type: data.eventType,
+              participant_side: data.data.participant_side,
+              player_id: data.data.playerId,
+              minute: data.data.minute,
+              reason: data.data.reason,
+              notes: data.data.notes,
+              created_at: new Date().toISOString()
+            };
+            
+            // Add to top of events list
+            setEvents(prev => [newEvent, ...prev].slice(0, 20));
+            console.log('✅ Event added via WebSocket (no API call!):', data.eventType);
+          }
+            
+          // If it's a substitution event, refresh squad members
+          if (data.eventType === 'substitution') {
+            await refreshSquadMembers();
+            console.log('✅ Squad members refreshed after substitution');
+          }
+        }
+      }
+    });
+    
+    // Listen for match pause
+    newSocket.on('match_paused', (data) => {
+      console.log('⏸️ Match paused event:', data);
+      if (data.matchId === matchId) {
+        setIsPaused(true);
+        setTimerRunning(false);
+        if (data.data?.live_score) {
+          setLiveScore(data.data.live_score);
+        }
+      }
+    });
+    
+    // Listen for match resume
+    newSocket.on('match_resumed', (data) => {
+      console.log('▶️ Match resumed event:', data);
+      if (data.matchId === matchId) {
+        setIsPaused(false);
+        setTimerRunning(true);
+        if (data.data?.live_score) {
+          setLiveScore(data.data.live_score);
+        }
+      }
+    });
+    
+    // Listen for half ended
+    newSocket.on('half_ended', (data) => {
+      console.log('⏸️ Half ended event:', data);
+      if (String(data.matchId) === String(matchId)) {
+        setIsPaused(true);
+        setTimerRunning(false);
+        if (data.data?.liveScore) {
+          setLiveScore(data.data.liveScore);
+          setCurrentHalf(data.data.liveScore.current_half);
+        }
+      }
+    });
+    
+    // Listen for break started
+    newSocket.on('break_started', (data) => {
+      console.log('☕ Break started event:', data);
+      if (String(data.matchId) === String(matchId)) {
+        setIsOnBreak(true);
+        setIsPaused(false);
+        setTimerRunning(true);
+        if (data.data?.liveScore) {
+          setLiveScore(data.data.liveScore);
+        }
+      }
+    });
+    
+    // Listen for break ended
+    newSocket.on('break_ended', (data) => {
+      console.log('✅ Break ended event:', data);
+      if (String(data.matchId) === String(matchId)) {
+        setIsOnBreak(false);
+        setIsPaused(true);
+        setTimerRunning(false);
+        if (data.data?.liveScore) {
+          setLiveScore(data.data.liveScore);
+        }
+      }
+    });
+    
+    // Listen for second half started
+    newSocket.on('second_half_started', (data) => {
+      console.log('▶️ Second half started event:', data);
+      if (String(data.matchId) === String(matchId)) {
+        setCurrentHalf(2);
+        setIsOnBreak(false);
+        setIsPaused(false);
+        setTimerRunning(true);
+        if (data.data?.liveScore) {
+          setLiveScore(data.data.liveScore);
+        }
+      }
+    });
+    
+    // Listen for penalty shootout start
+    newSocket.on('penalty_shootout_start', (data) => {
+      console.log('⚽ Penalty shootout started:', data);
+      
+      if (data.matchId === matchId && data.data?.liveScore) {
+        setLiveScore(data.data.liveScore);
+        setCurrentHalf(3); // Half 3 = Penalties
+        setTimerRunning(false); // Stop timer for penalties
+        
+        // No alert on referee page - penalty UI shows directly
+      }
+    });
+    
+    // Listen for match completion
+    newSocket.on('match_completed', (data) => {
+      console.log('🏆 Match completed event:', data);
+      
+      if (data.matchId === matchId) {
+        setMatchStatus('completed');
+        setTimerRunning(false);
+        setLiveScore(data.liveScore);
+        
+        // Get winner name from the event data (includes participant names)
+        let winnerName;
+        if (data.liveScore && data.liveScore.match_winner === 'participant1') {
+          winnerName = data.participant1_name || match?.participant1_name || 'Participant 1';
+        } else if (data.liveScore && data.liveScore.match_winner === 'participant2') {
+          winnerName = data.participant2_name || match?.participant2_name || 'Participant 2';
+        } else {
+          winnerName = 'Draw';
+        }
+        
+        // Show detailed completion alert with correct score based on sport type
+        let finalScore = '0 - 0';
+        if (data.liveScore.participant1?.sets_won !== undefined) {
+          // Set-based sports (Tennis, Badminton, Volleyball)
+          const p1Sets = data.liveScore.participant1?.sets_won || 0;
+          const p2Sets = data.liveScore.participant2?.sets_won || 0;
+          finalScore = `${p1Sets} - ${p2Sets} Sets`;
+        } else if (data.liveScore.participant1?.games_won !== undefined) {
+          // Game-based sports (Table Tennis, Squash, Pickleball)
+          const p1Games = data.liveScore.participant1?.games_won || 0;
+          const p2Games = data.liveScore.participant2?.games_won || 0;
+          finalScore = `${p1Games} - ${p2Games} Games`;
+        } else if (data.liveScore.participant1?.goals !== undefined) {
+          // Time-based sports (Football, Basketball, Hockey)
+          const p1Goals = data.liveScore.participant1?.goals || 0;
+          const p2Goals = data.liveScore.participant2?.goals || 0;
+          finalScore = `${p1Goals} - ${p2Goals} Goals`;
+          
+          // Add penalty shootout score if present
+          if (data.liveScore.penalty_shootout) {
+            const p1Pens = data.liveScore.penalty_shootout.participant1_scored || 0;
+            const p2Pens = data.liveScore.penalty_shootout.participant2_scored || 0;
+            finalScore += ` (${p1Pens}-${p2Pens} pens)`;
+          }
+        }
+        
+        alert(`🏆 Match Complete!\\n\\nWinner: ${winnerName}\\nFinal Score: ${finalScore}\\n\\nMatch status updated to Completed.`);
+        
+        // Refresh page to show completion UI
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      }
+    });
+    
+    newSocket.on('disconnect', () => {
+      console.log('❌ Scoreboard WebSocket disconnected');
+    });
+    
+    newSocket.on('error', (error) => {
+      console.error('WebSocket error:', error);
+    });
+    
+    setSocket(newSocket);
+  };
+
+  // Match Timer - Display only (server manages the actual timer)
+  // Server-side timer broadcasts updates every second via WebSocket
+  // No API calls needed - fully real-time!
+  useEffect(() => {
+    console.log('⏱️ Timer display mode - Server manages timer, zero API calls!');
+  }, [timerRunning, isPaused]);
+
+  // Prevent accidental navigation during active match
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (matchStatus === 'in_progress') {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    };
+
+    const handlePopState = (e) => {
+      if (matchStatus === 'in_progress') {
+        const confirmLeave = window.confirm(
+          '⚠️ WARNING: Match is in progress!\n\nAre you sure you want to leave? Any unsaved progress may be lost.'
+        );
+        if (!confirmLeave) {
+          window.history.pushState(null, '', window.location.pathname);
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
+
+    // Push initial state to enable back button detection
+    window.history.pushState(null, '', window.location.pathname);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [matchStatus]);
+
+  // Refresh squad members with updated is_playing status
+  const refreshSquadMembers = async () => {
+    if (!match || match.tournament_category !== 'teams') return;
+    
+    try {
+      const squadsRes = await matchSquadService.getMatchSquads(matchId);
+      if (squadsRes.success && squadsRes.squads) {
+        // Update match state with fresh squad data
+        setMatch(prevMatch => {
+          const updatedMatch = { ...prevMatch };
+          
+          // Update participant1_details members
+          const team1Squad = squadsRes.squads.find(s => s.team_id === prevMatch.participant1_details?.id);
+          if (team1Squad && updatedMatch.participant1_details) {
+            updatedMatch.participant1_details = {
+              ...updatedMatch.participant1_details,
+              members: team1Squad.members
+            };
+          }
+          
+          // Update participant2_details members
+          const team2Squad = squadsRes.squads.find(s => s.team_id === prevMatch.participant2_details?.id);
+          if (team2Squad && updatedMatch.participant2_details) {
+            updatedMatch.participant2_details = {
+              ...updatedMatch.participant2_details,
+              members: team2Squad.members
+            };
+          }
+          
+          console.log('✅ Squad members refreshed with updated is_playing status');
+          return updatedMatch;
+        });
+      }
+    } catch (error) {
+      console.error('Error refreshing squad members:', error);
+    }
+  };
+
+  const fetchMatchData = async () => {
+    try {
+      setLoading(true);
+      const matchRes = await api.get(`/matches/${matchId}/details`);
+      let matchData = matchRes.data.data;
+      
+      // ✅ SECURITY CHECK: Verify user is the assigned referee
+      if (!user || matchData.referee_id !== user.id) {
+        alert('⛔ Access Denied\n\nOnly the assigned referee can access this page.');
+        navigate(`/matches/${matchId}`);
+        return;
+      }
+      
+      // Check squad status for team sports
+      if (matchData?.tournament_category === 'teams') {
+        try {
+          const status = await matchSquadService.checkSquadsStatus(matchId);
+          setSquadStatus(status);
+        } catch (err) {
+          console.error('Error checking squad status:', err);
+        }
+      }
+
+      console.log("dev value=====", matchData?.tournament_category)
+      console.log("Participant 1 Details:", matchData.participant1_details);
+      console.log("Participant 2 Details:", matchData.participant2_details);
+
+      // Extract participant names based on category
+      if (matchData?.tournament_category === "teams") {
+        // Teams: Use team name directly
+        if (matchData.participant1_details) {
+          matchData.participant1_name = matchData.participant1_details.name;
+          console.log("Set Team 1 Name:", matchData.participant1_name);
+        }
+        if (matchData.participant2_details) {
+          matchData.participant2_name = matchData.participant2_details.name;
+          console.log("Set Team 2 Name:", matchData.participant2_name);
+        }
+      } else if (matchData?.tournament_category === "doubles") {
+        // Doubles: Use pair names
+        if (matchData.participant1_details) {
+          const p1 = matchData.participant1_details.player1;
+          const p2 = matchData.participant1_details.player2;
+          matchData.participant1_name = `${p1?.first_name} ${p1?.last_name} / ${p2?.first_name} ${p2?.last_name}`;
+        }
+        if (matchData.participant2_details) {
+          const p1 = matchData.participant2_details.player1;
+          const p2 = matchData.participant2_details.player2;
+          matchData.participant2_name = `${p1?.first_name} ${p1?.last_name} / ${p2?.first_name} ${p2?.last_name}`;
+        }
+      } else {
+        // Singles: Use user first and last name
+        if (matchData.participant1_details?.user) {
+          matchData.participant1_name = `${matchData.participant1_details.user.first_name} ${matchData.participant1_details.user.last_name}`;
+        }
+        if (matchData.participant2_details?.user) {
+          matchData.participant2_name = `${matchData.participant2_details.user.first_name} ${matchData.participant2_details.user.last_name}`;
+        }
+      }
+      
+      // Debug: Check if names are set correctly
+      console.log("Participant 1 Name:", matchData.participant1_name);
+      console.log("Participant 2 Name:", matchData.participant2_name);
+      console.log("Full Match Data:", matchData);
+      console.log("🎯 Match Config from API:", matchData.match_config);
+      
+      setMatch(matchData);
+      setMatchStatus(matchData.status);
+
+
+      // Sport info is already included in match details
+      setSport({
+        id: matchData.sport_id,
+        name: matchData.sport_name
+      });
+
+      if (matchData.status === 'in_progress') {
+        const scoreRes = await api.get(`/matches/${matchId}/live-score`);
+        const liveScoreData = scoreRes.data.data;
+        
+        // Check if liveScoreData is valid
+        if (!liveScoreData) {
+          console.warn('⚠️ No live score data returned for in-progress match');
+          return;
+        }
+        
+        setLiveScore(liveScoreData);
+        
+        // Recover timer from live score if available
+        if (liveScoreData.elapsed_seconds !== undefined) {
+          setMatchTimer(liveScoreData.elapsed_seconds);
+          // Only start timer if match is not paused
+          setTimerRunning(!matchData.is_paused);
+        }
+        
+        if (liveScoreData.current_half) {
+          setCurrentHalf(liveScoreData.current_half);
+        }
+        
+        if (liveScoreData.is_on_break !== undefined) {
+          setIsOnBreak(liveScoreData.is_on_break);
+        }
+        
+        // Always update period duration from live score (even if 0)
+        if (liveScoreData.period_duration !== undefined) {
+          setPeriodDuration(liveScoreData.period_duration);
+          console.log('✅ Period duration updated from live score:', liveScoreData.period_duration, 'minutes');
+        }
+        
+        // Set paused state from match data
+        setIsPaused(matchData.is_paused || false);
+
+        const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+        setEvents(eventsRes.data.data || []);
+        
+        console.log('Match resumed - Timer:', liveScoreData.elapsed_seconds, 'Paused:', matchData.is_paused);
+      }
+    } catch (error) {
+      console.error('Failed to fetch match data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleOpenSquadModal = (teamId, teamName) => {
+    setCurrentSquadTeam({ id: teamId, name: teamName });
+    setShowSquadModal(true);
+  };
+  
+  const handleSquadSaved = async () => {
+    // Refresh squad status
+    if (match?.tournament_category === 'teams') {
+      try {
+        const status = await matchSquadService.checkSquadsStatus(matchId);
+        setSquadStatus(status);
+      } catch (err) {
+        console.error('Error checking squad status:', err);
+      }
+    }
+  };
+
+  const handleStartMatch = async () => {
+    // Check if squads are set for team sports
+    if (match?.tournament_category === 'teams') {
+      const status = await matchSquadService.checkSquadsStatus(matchId);
+      if (!status.both_squads_set) {
+        alert('Please select squads for both teams before starting the match.');
+        return;
+      }
+    }
+    
+    // For non-Football sports, show server selection modal first
+    if (sport?.name !== 'Football') {
+      setShowServerSelectionModal(true);
+      return;
+    }
+    
+    // Football: Start directly without server selection
+    await startMatchWithServer(null);
+  };
+  
+  const startMatchWithServer = async (firstServer) => {
+    try {
+      // Show loading state while starting match
+      setLoading(true);
+      
+      // Send firstServer parameter to backend
+      const res = await api.post(`/matches/${matchId}/start`, { firstServer });
+      
+      console.log('📦 Raw API response:', res);
+      console.log('📦 res.data:', res.data);
+      console.log('📦 res.data.data:', res.data.data);
+      
+      const liveScoreData = res.data.data;
+      
+      if (!liveScoreData) {
+        throw new Error('Failed to initialize match - no live score returned');
+      }
+      
+      console.log('🚀 Match start response:', JSON.stringify(liveScoreData));
+      
+      // Only validate period_duration for time-based sports (Football, Basketball, Hockey)
+      const isTimeBased = ['Football', 'Basketball', 'Hockey'].includes(liveScoreData.sport);
+      
+      if (isTimeBased) {
+        console.log('✅ Period duration from backend:', liveScoreData.period_duration, 'minutes');
+        
+        // Validate period_duration exists for time-based sports
+        if (liveScoreData.period_duration === undefined || liveScoreData.period_duration === null) {
+          console.error('❌ ERROR: Backend returned undefined/null period_duration for time-based sport!');
+          console.error('Full response:', liveScoreData);
+        }
+      }
+      
+      // CRITICAL: Set periodDuration FIRST before any other state
+      // This ensures the UI renders with correct duration from the start
+      const configuredPeriodDuration = liveScoreData.period_duration !== undefined 
+        ? liveScoreData.period_duration 
+        : 45;
+      
+      if (isTimeBased) {
+        console.log('🎯 Setting period duration to:', configuredPeriodDuration);
+      }
+      
+      // Set all states in batch using React 18's automatic batching
+      setPeriodDuration(configuredPeriodDuration);
+      setLiveScore(liveScoreData);
+      setMatchStatus('in_progress');
+      setCurrentHalf(liveScoreData.current_half || 1);
+      setMatchTimer(liveScoreData.elapsed_seconds || 0);
+      
+      // Wait for React to process state updates
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Finally start the timer
+      setTimerRunning(true);
+      
+      // ✅ NEW: Start match timing tracking (non-blocking)
+      try {
+        await matchTimingService.startMatchTiming(matchId);
+        console.log('⏱️ Match timing started');
+        
+        // Start first segment based on sport type
+        const segmentType = isTimeBased ? 'half' : 
+                           (liveScoreData.sport === 'Tennis' || liveScoreData.sport === 'Padel') ? 'set' : 'game';
+        await matchTimingService.startSegment(matchId, segmentType, 1);
+        console.log(`⏱️ ${segmentType} 1 timing started`);
+      } catch (timingError) {
+        // Don't fail the match start if timing fails
+        console.warn('⚠️ Failed to start timing tracking (non-critical):', timingError);
+      }
+      
+      // Hide loading state
+      setLoading(false);
+      
+      console.log('✅ Match started successfully with period duration:', configuredPeriodDuration, 'minutes');
+    } catch (error) {
+      console.error('Failed to start match:', error);
+      setLoading(false);
+      alert('Failed to start match: ' + (error.response?.data?.error || error.message || 'Unknown error'));
+    }
+  };
+
+  const handlePauseMatch = async () => {
+    try {
+      // Server-side timer will automatically stop incrementing when paused
+      await api.post(`/matches/${matchId}/pause`, { reason: 'Referee pause' });
+      setIsPaused(true);
+      setTimerRunning(false); // Stop local display updates
+      console.log('⏸️ Match paused - Server timer stopped');
+    } catch (error) {
+      console.error('Failed to pause match:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to pause match'));
+    }
+  };
+
+  const handleResumeMatch = async () => {
+    try {
+      // Server-side timer will automatically resume incrementing
+      await api.post(`/matches/${matchId}/resume`);
+      setIsPaused(false);
+      setTimerRunning(true); // Resume local display updates
+      console.log('▶️ Match resumed - Server timer continues');
+    } catch (error) {
+      console.error('Failed to resume match:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to resume match'));
+    }
+  };
+
+  const handleEndMatch = async () => {
+    if (confirm('Are you sure you want to end this match?')) {
+      try {
+        // Server-side timer will automatically stop when match ends
+        await api.post(`/matches/${matchId}/end`);
+        setTimerRunning(false); // Stop timer
+        navigate(`/matches/${matchId}`);
+      } catch (error) {
+        console.error('Failed to end match:', error);
+        alert('Error: ' + (error.response?.data?.error || 'Failed to end match'));
+      }
+    }
+  };
+
+  // NEW: Manual half control functions
+  const handleEndHalf = async () => {
+    const halfName = currentHalf === 1 ? '1st' 
+                   : currentHalf === 2 ? '2nd'
+                   : currentHalf === 3 ? 'Extra Time 1st'
+                   : 'Extra Time 2nd';
+    
+    const message = currentHalf === 1 
+      ? 'End 1st Half?\n\nBreak will start automatically.'
+      : currentHalf === 2
+      ? 'End 2nd Half?\n\nMatch will be completed and winner will be declared.'
+      : currentHalf === 3
+      ? 'End Extra Time 1st Half?\n\nBreak will start automatically.'
+      : 'End Extra Time 2nd Half?\n\nMatch will be completed and winner will be declared.';
+    
+    if (confirm(message)) {
+      try {
+        const response = await api.post(`/matches/${matchId}/end-half`);
+        const updatedLiveScore = response.data.data;
+        setLiveScore(updatedLiveScore);
+        setCurrentHalf(updatedLiveScore.current_half);
+        setIsOnBreak(updatedLiveScore.is_on_break);
+        setIsPaused(updatedLiveScore.is_paused);
+        setTimerRunning(!updatedLiveScore.is_paused);
+        console.log(`✅ ${halfName} half ended`, updatedLiveScore);
+        
+        // If 2nd or 4th half ended, check if match is complete or awaiting draw decision
+        if (currentHalf === 2 || currentHalf === 4) {
+          console.log('🔍 2nd half ended - checking status:', {
+            match_complete: updatedLiveScore.match_complete,
+            awaiting_draw_decision: updatedLiveScore.awaiting_draw_decision,
+            score1: updatedLiveScore.participant1?.goals || 0,
+            score2: updatedLiveScore.participant2?.goals || 0
+          });
+          
+          if (updatedLiveScore.awaiting_draw_decision) {
+            // Draw - show options modal (check this FIRST before match_complete)
+            console.log('⚖️ Draw detected - showing modal');
+            setShowDrawDecisionModal(true);
+          } else if (updatedLiveScore.match_complete) {
+            // Clear winner - show result and redirect
+            setMatchStatus('completed');
+            
+            const score1 = updatedLiveScore.participant1?.goals || 0;
+            const score2 = updatedLiveScore.participant2?.goals || 0;
+            const winnerName = updatedLiveScore.match_winner === 'participant1' 
+              ? match?.participant1_name 
+              : updatedLiveScore.match_winner === 'participant2'
+              ? match?.participant2_name
+              : 'Draw';
+            
+            alert(`🏆 Match Complete!\n\nFinal Score: ${score1} - ${score2}\nWinner: ${winnerName}`);
+            
+            // Redirect to match details page after 2 seconds
+            setTimeout(() => {
+              navigate(`/matches/${matchId}`);
+            }, 2000);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to end half:', error);
+        alert('Error: ' + (error.response?.data?.error || 'Failed to end half'));
+      }
+    }
+  };
+
+  const handleStartBreak = async () => {
+    if (confirm('Start Break Period?\n\nBreak timer will reset to 0:00.')) {
+      try {
+        // First, end the 1st half if not already ended
+        if (!liveScore?.half_1_ended) {
+          const endResponse = await api.post(`/matches/${matchId}/end-half`);
+          setLiveScore(endResponse.data.data);
+          console.log('✅ 1st half auto-ended before break');
+          
+          // Wait a moment for state to settle
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        // Then start the break - timer resets to 0
+        const response = await api.post(`/matches/${matchId}/start-break`);
+        const breakLiveScore = response.data.data;
+        setLiveScore(breakLiveScore);
+        setIsOnBreak(breakLiveScore.is_on_break);
+        setIsPaused(breakLiveScore.is_paused);
+        setCurrentHalf(breakLiveScore.current_half);
+        setMatchTimer(breakLiveScore.elapsed_seconds || 0); // Sync with server
+        setTimerRunning(!breakLiveScore.is_paused);
+        console.log('✅ Break started - timer reset to 0:00', breakLiveScore);
+      } catch (error) {
+        console.error('Failed to start break:', error);
+        alert('Error: ' + (error.response?.data?.error || 'Failed to start break'));
+      }
+    }
+  };
+
+  const handleEndBreak = async () => {
+    if (confirm('End Break?\n\n2nd half will start automatically.')) {
+      try {
+        const response = await api.post(`/matches/${matchId}/end-break`);
+        const endBreakLiveScore = response.data.data;
+        setLiveScore(endBreakLiveScore);
+        setCurrentHalf(endBreakLiveScore.current_half); // Should be 2 (or 4 for extra time)
+        setIsOnBreak(endBreakLiveScore.is_on_break); // Should be false
+        setIsPaused(endBreakLiveScore.is_paused); // Should be false
+        
+        // RESET TIMER TO 0:00 if starting extra time 2nd half
+        if (endBreakLiveScore.is_extra_time && endBreakLiveScore.extra_time_current_half === 2) {
+          setMatchTimer(0);
+          console.log('✅ Break ended - Extra time 2nd half started from 0:00');
+        } else {
+          setMatchTimer(endBreakLiveScore.elapsed_seconds || 0);
+          console.log('✅ Break ended - 2nd half started', endBreakLiveScore);
+        }
+        
+        setTimerRunning(!endBreakLiveScore.is_paused); // Should be true
+      } catch (error) {
+        console.error('Failed to end break:', error);
+        alert('Error: ' + (error.response?.data?.error || 'Failed to end break'));
+      }
+    }
+  };
+
+  const handleStartSecondHalf = async () => {
+    if (confirm('Start 2nd Half?\n\nTimer will start from 45:00.')) {
+      try {
+        const response = await api.post(`/matches/${matchId}/start-second-half`);
+        const half2LiveScore = response.data.data;
+        setLiveScore(half2LiveScore);
+        setCurrentHalf(half2LiveScore.current_half);
+        setIsOnBreak(half2LiveScore.is_on_break);
+        setMatchTimer(half2LiveScore.elapsed_seconds || 0);
+        setTimerRunning(!half2LiveScore.is_paused);
+        console.log('✅ 2nd half started from 45:00', half2LiveScore);
+      } catch (error) {
+        console.error('Failed to start 2nd half:', error);
+        alert('Error: ' + (error.response?.data?.error || 'Failed to start 2nd half'));
+      }
+    }
+  };
+
+  // Draw decision handlers
+  const handleDeclareDraw = async () => {
+    try {
+      const response = await api.post(`/matches/${matchId}/declare-draw`);
+      const updatedLiveScore = response.data.data;
+      setLiveScore(updatedLiveScore);
+      setMatchStatus('completed');
+      setShowDrawDecisionModal(false);
+      
+      alert('🤝 Match Declared as DRAW!');
+      
+      setTimeout(() => {
+        navigate(`/matches/${matchId}`);
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to declare draw:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to declare draw'));
+    }
+  };
+
+  const handleStartExtraTime = async () => {
+    if (!extraTimeMinutes || extraTimeMinutes <= 0) {
+      alert('Please enter a valid extra time duration');
+      return;
+    }
+    
+    try {
+      const response = await api.post(`/matches/${matchId}/start-extra-time`, {
+        extraTimeMinutes: parseInt(extraTimeMinutes)
+      });
+      const updatedLiveScore = response.data.data;
+      setLiveScore(updatedLiveScore);
+      setCurrentHalf(3); // Extra time 1st half
+      setIsPaused(false);
+      setTimerRunning(true);
+      setShowDrawDecisionModal(false);
+      
+      // RESET TIMER TO 0:00 for extra time
+      setMatchTimer(0);
+      
+      const halfDuration = Math.floor(extraTimeMinutes / 2);
+      alert(`⏱️ Extra Time Started!\n\nTotal: ${extraTimeMinutes} min\nEach half: ${halfDuration} min`);
+    } catch (error) {
+      console.error('Failed to start extra time:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to start extra time'));
+    }
+  };
+
+  const handleStartPenalties = async () => {
+    try {
+      // Call backend to initialize penalty shootout
+      const response = await api.post(`/matches/${matchId}/start-penalty-shootout`);
+      const updatedLiveScore = response.data.data;
+      
+      // Update local state
+      setLiveScore(updatedLiveScore);
+      setIsPaused(true);
+      setTimerRunning(false);
+      setShowDrawDecisionModal(false);
+      
+      console.log('⚽ Penalty shootout started!', updatedLiveScore);
+    } catch (error) {
+      console.error('Failed to start penalty shootout:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to start penalty shootout'));
+    }
+  };
+
+  // OLD: Manual half control functions (keep for backward compatibility)
+  const handleSetFirstHalf = async () => {
+    if (confirm('Switch to First Half?\n\nTimer will reset to 0:00')) {
+      try {
+        setCurrentHalf(1);
+        setIsOnBreak(false);
+        setMatchTimer(0); // Reset timer
+        
+        // Update in database and broadcast to live viewers
+        const response = await api.post(`/matches/${matchId}/timer`, {
+          elapsed_seconds: 0,
+          current_half: 1
+        });
+        
+        setLiveScore(response.data.data);
+        console.log('✅ First half set - Timer reset broadcasted');
+      } catch (error) {
+        console.error('Failed to set first half:', error);
+        alert('Failed to change half: ' + (error.response?.data?.error || error.message));
+      }
+    }
+  };
+
+  const handleSetBreak = async () => {
+    if (confirm('Start Half-Time Break?\n\nTimer will continue running.')) {
+      try {
+        setIsOnBreak(true);
+        
+        // Update in database and broadcast to live viewers
+        const response = await api.post(`/matches/${matchId}/timer`, {
+          elapsed_seconds: matchTimer,
+          current_half: currentHalf
+        });
+        
+        setLiveScore(response.data.data);
+        console.log('✅ Break started - broadcasted');
+      } catch (error) {
+        console.error('Failed to set break:', error);
+        alert('Failed to start break: ' + (error.response?.data?.error || error.message));
+      }
+    }
+  };
+
+  const handleSetSecondHalf = async () => {
+    if (confirm('Switch to Second Half?\n\nTimer will reset to 0:00')) {
+      try {
+        setCurrentHalf(2);
+        setIsOnBreak(false);
+        setMatchTimer(0); // Reset timer for second half
+        
+        // Update in database and broadcast to live viewers
+        const response = await api.post(`/matches/${matchId}/timer`, {
+          elapsed_seconds: 0,
+          current_half: 2
+        });
+        
+        setLiveScore(response.data.data);
+        console.log('✅ Second half set - Timer reset broadcasted');
+      } catch (error) {
+        console.error('Failed to set second half:', error);
+        alert('Failed to change half: ' + (error.response?.data?.error || error.message));
+      }
+    }
+  };
+
+  // Format timer display (MM:SS)
+  const formatTimer = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleDeclareWinner = async (participantSide) => {
+    // ✅ SECURITY CHECK: Verify user is the assigned referee
+    if (!user || !match || match.referee_id !== user.id) {
+      alert('⛔ Access Denied\n\nOnly the assigned referee can declare a winner.');
+      return;
+    }
+    
+    const winnerName = participantSide === 'participant1' ? match.participant1_name : match.participant2_name;
+    
+    try {
+      // Update live score to mark match as complete with winner
+      const updatedLiveScore = {
+        ...liveScore,
+        match_complete: true,
+        match_winner: participantSide
+      };
+      
+      // Update match status to completed with winner
+      await api.put(`/matches/${matchId}`, {
+        status: 'completed',
+        winner_participant_id: participantSide === 'participant1' ? match.participant1_id : match.participant2_id,
+        live_score: JSON.stringify(updatedLiveScore)
+      });
+      
+      // Update local state
+      setLiveScore(updatedLiveScore);
+      setMatchStatus('completed');
+      setTimerRunning(false);
+      
+      // Note: Backend will broadcast WebSocket event to all clients
+      
+      // Show completion alert with final score
+      let finalScore = '0 - 0';
+      if (updatedLiveScore.participant1?.sets_won !== undefined) {
+        finalScore = `${updatedLiveScore.participant1.sets_won} - ${updatedLiveScore.participant2.sets_won} Sets`;
+      } else if (updatedLiveScore.participant1?.games_won !== undefined) {
+        finalScore = `${updatedLiveScore.participant1.games_won} - ${updatedLiveScore.participant2.games_won} Games`;
+      } else if (updatedLiveScore.participant1?.goals !== undefined) {
+        finalScore = `${updatedLiveScore.participant1.goals} - ${updatedLiveScore.participant2.goals} Goals`;
+      }
+      
+      alert(`🏆 Match Complete!\n\nWinner: ${winnerName}\nFinal Score: ${finalScore}\n\nMatch status updated to Completed.`);
+      
+      // Refresh page to show completion UI
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to declare winner:', error);
+      alert('Failed to declare winner. Please try again.');
+    }
+  };
+
+  const handleToggleServer = async (playerId = null, keepSamePair = false) => {
+    try {
+      const payload = playerId ? { player_id: playerId, keep_same_pair: keepSamePair } : {};
+      const res = await api.post(`/matches/${matchId}/score/toggle-server`, payload);
+      
+      if (res.data.success) {
+        setLiveScore(res.data.data.live_score);
+        console.log('✅ Server toggled:', res.data.data.server, playerId ? `Player ID: ${playerId}` : '');
+      }
+    } catch (error) {
+      console.error('Failed to toggle server:', error);
+      alert('Failed to toggle server: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const handleAddPoint = async (participantSide, eventType = 'point') => {
+    try {
+      const res = await api.post(`/matches/${matchId}/score/point`, {
+        participant_side: participantSide,
+        event_type: eventType
+      });
+      
+      const newLiveScore = res.data.data.live_score;
+      const oldLiveScore = liveScore;
+      
+      // ✅ NEW: Track segment changes (set/game transitions)
+      if (oldLiveScore && newLiveScore) {
+        const oldSegmentNum = oldLiveScore.current_set || oldLiveScore.current_game || oldLiveScore.current_half || 1;
+        const newSegmentNum = newLiveScore.current_set || newLiveScore.current_game || newLiveScore.current_half || 1;
+        
+        // Detect segment change (set/game/half ended and new one started)
+        if (newSegmentNum > oldSegmentNum) {
+          const oldSegmentInfo = getSegmentInfo(liveScore);
+          const newSegmentInfo = getSegmentInfo(newLiveScore);
+          
+          try {
+            // End previous segment
+            await matchTimingService.endSegment(matchId, oldSegmentInfo.type, oldSegmentNum);
+            console.log(`⏱️ ${oldSegmentInfo.type} ${oldSegmentNum} ended`);
+            
+            // Start new segment (if match not complete)
+            if (!newLiveScore.match_complete) {
+              await matchTimingService.startSegment(matchId, newSegmentInfo.type, newSegmentNum);
+              console.log(`⏱️ ${newSegmentInfo.type} ${newSegmentNum} started`);
+            }
+          } catch (timingError) {
+            console.warn('⚠️ Failed to track segment timing (non-critical):', timingError);
+          }
+        }
+      }
+      
+      // Check if match is complete OR awaiting confirmation
+      if (newLiveScore.match_complete || newLiveScore.awaiting_match_end_confirmation) {
+        setLiveScore(newLiveScore);
+        
+        // Only set status to completed if truly complete (not just awaiting confirmation)
+        if (newLiveScore.match_complete) {
+          setMatchStatus('completed');
+        }
+        
+        // ✅ End current segment (whether confirming or completing)
+        try {
+          const segmentInfo = getSegmentInfo(newLiveScore);
+          await matchTimingService.endSegment(matchId, segmentInfo.type, segmentInfo.number);
+          console.log(`⏱️ Final ${segmentInfo.type} ${segmentInfo.number} ended`);
+          
+          // Only end match timing if truly complete (not awaiting confirmation)
+          if (newLiveScore.match_complete) {
+            await matchTimingService.endMatchTiming(matchId);
+            console.log('⏱️ Match timing ended');
+          }
+        } catch (timingError) {
+          console.warn('⚠️ Failed to end timing tracking (non-critical):', timingError);
+        }
+        
+        // Only show winner modal if truly complete (not awaiting confirmation)
+        if (newLiveScore.match_complete && !newLiveScore.awaiting_match_end_confirmation) {
+          const winnerName = newLiveScore.match_winner === 'participant1' 
+            ? match.participant1_name 
+            : match.participant2_name;
+          
+          // Show completion alert with correct score
+          let finalScore = '0 - 0';
+          if (newLiveScore.participant1?.sets_won !== undefined) {
+            finalScore = `${newLiveScore.participant1.sets_won} - ${newLiveScore.participant2.sets_won} Sets`;
+          } else if (newLiveScore.participant1?.games_won !== undefined) {
+            finalScore = `${newLiveScore.participant1.games_won} - ${newLiveScore.participant2.games_won} Games`;
+          }
+          alert(`🏆 Match Complete!\n\nWinner: ${winnerName}\n\nFinal Score: ${finalScore}`);
+          
+          // Refresh match data to update status
+          setTimeout(() => {
+            fetchMatchData();
+          }, 1000);
+        }
+        // If awaiting confirmation, the modal in SetBasedScoringInterface will handle it
+      } else {
+        // Normal point - update score
+        setLiveScore(newLiveScore);
+        setEvents([res.data.data.event, ...events]);
+      }
+    } catch (error) {
+      console.error('Failed to add point:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to add point'));
+    }
+  };
+
+  const handleUndoPoint = async () => {
+    if (!confirm('⚠️ Undo last action?\n\nThis will revert the last point/event and cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      const res = await api.post(`/matches/${matchId}/score/undo`);
+      const updatedLiveScore = res.data.data.live_score;
+      const undoneEvent = res.data.data.undone_event;
+      
+      setLiveScore(updatedLiveScore);
+      
+      // Refresh events list
+      const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+      setEvents(eventsRes.data.data || []);
+      
+      // Show success message
+      alert(`✅ ${undoneEvent || 'Last action'} undone successfully`);
+      
+      console.log('✅ Undo successful:', undoneEvent);
+    } catch (error) {
+      console.error('Failed to undo:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to undo last action'));
+    }
+  };
+
+  const handleRecordEvent = async (eventData) => {
+    try {
+      // Check if it's a card event - use dedicated endpoints
+      if (eventData.event_type === 'yellow_card') {
+        const res = await api.post(`/matches/${matchId}/score/yellow-card`, {
+          participant_side: eventData.participant_side,
+          player_id: eventData.player_id,
+          minute: eventData.minute,
+          reason: eventData.reason || ''
+        });
+        
+        const newLiveScore = res.data.data.live_score;
+        setLiveScore(newLiveScore);
+        
+        // Check if this was a second yellow (automatic red card)
+        if (res.data.data.second_yellow || res.data.data.automatic_red_card) {
+          alert('🟨🟨 ➡️ 🟥\n\nSECOND YELLOW CARD!\n\nPlayer has been automatically sent off with a RED CARD!');
+        }
+        
+        // Fetch events to update the log
+        const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+        setEvents(eventsRes.data.data || []);
+      } else if (eventData.event_type === 'red_card') {
+        const res = await api.post(`/matches/${matchId}/score/red-card`, {
+          participant_side: eventData.participant_side,
+          player_id: eventData.player_id,
+          minute: eventData.minute,
+          reason: eventData.reason || ''
+        });
+        
+        const newLiveScore = res.data.data.live_score;
+        setLiveScore(newLiveScore);
+        
+        // Fetch events to update the log
+        const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+        setEvents(eventsRes.data.data || []);
+      } else {
+        // Other events - use generic event endpoint
+        await api.post(`/matches/${matchId}/events`, {
+          ...eventData,
+          score_snapshot: liveScore
+        });
+        
+        // Fetch events to update the log
+        const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+        setEvents(eventsRes.data.data || []);
+        
+        // If it's a substitution, refresh squad members to update is_playing status
+        if (eventData.event_type === 'substitution') {
+          await refreshSquadMembers();
+          console.log('🔄 Squad members refreshed after substitution');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to record event:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to record event'));
+    }
+  };
+
+  const handleAddGoal = async (participantSide, eventData) => {
+    try {
+      const res = await api.post(`/matches/${matchId}/score/goal`, {
+        participant_side: participantSide,
+        player_id: eventData.player_id,
+        minute: eventData.minute,
+        goal_type: eventData.metadata?.goal_type || 'open_play',
+        assist_player_id: eventData.metadata?.assist_player_id
+        // DO NOT send elapsed_seconds - timer is managed by server!
+      });
+      
+      const newLiveScore = res.data.data.live_score;
+      setLiveScore(newLiveScore);
+      
+      // Fetch events to update the log
+      const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+      setEvents(eventsRes.data.data || []);
+      
+      // Check if match is complete
+      if (newLiveScore.match_complete) {
+        setMatchStatus('completed');
+        setTimerRunning(false); // Stop timer when match completes
+        let winnerName;
+        if (newLiveScore.match_winner === 'participant1') {
+          winnerName = match.participant1_name || 'Participant 1';
+        } else if (newLiveScore.match_winner === 'participant2') {
+          winnerName = match.participant2_name || 'Participant 2';
+        } else {
+          winnerName = 'Draw';
+        }
+        // Show completion alert with correct score
+        let finalScore = '0 - 0';
+        if (newLiveScore.participant1?.sets_won !== undefined) {
+          finalScore = `${newLiveScore.participant1.sets_won} - ${newLiveScore.participant2.sets_won} Sets`;
+        } else if (newLiveScore.participant1?.games_won !== undefined) {
+          finalScore = `${newLiveScore.participant1.games_won} - ${newLiveScore.participant2.games_won} Games`;
+        } else if (newLiveScore.participant1?.goals !== undefined) {
+          finalScore = `${newLiveScore.participant1.goals} - ${newLiveScore.participant2.goals} Goals`;
+        }
+        alert(`🏆 Match Complete!\n\nWinner: ${winnerName}\n\nFinal Score: ${finalScore}`);
+      }
+      // Don't call fetchMatchData() - it resets the timer
+    } catch (error) {
+      console.error('Failed to add goal:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to add goal'));
+    }
+  };
+
+  // ✅ NEW: Handle add additional time (injury time)
+  const handleAddTime = async (additionalSeconds) => {
+    try {
+      const res = await api.post(`/matches/${matchId}/additional-time`, {
+        half: currentHalf,
+        additional_seconds: additionalSeconds
+      });
+      
+      // Update live score with new additional time
+      const updatedLiveScore = res.data.data?.live_score || liveScore;
+      setLiveScore(updatedLiveScore);
+      
+      // Emit WebSocket event to all viewers
+      if (socket) {
+        socket.emit('additional_time_added', {
+          matchId,
+          half: currentHalf,
+          additionalSeconds,
+          totalAdditionalTime: (liveScore.additional_time_seconds || 0) + additionalSeconds
+        });
+      }
+      
+      const minutes = Math.floor(additionalSeconds / 60);
+      const seconds = additionalSeconds % 60;
+      alert(`✅ Added +${minutes}:${seconds.toString().padStart(2, '0')} additional time to Half ${currentHalf}`);
+      
+      console.log(`⏱️ Additional time added: +${additionalSeconds}s to Half ${currentHalf}`);
+    } catch (error) {
+      console.error('Failed to add additional time:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to add additional time'));
+    }
+  };
+
+  // ✅ NEW: Handle record penalty kick
+  const handleRecordPenalty = async (participantSide, playerId, result) => {
+    try {
+      const res = await api.post(`/matches/${matchId}/penalty-kick`, {
+        participant_side: participantSide,
+        player_id: playerId,
+        result: result
+      });
+      
+      const newLiveScore = res.data.data.live_score;
+      setLiveScore(newLiveScore);
+      
+      // Fetch events to update the log
+      const eventsRes = await api.get(`/matches/${matchId}/events?limit=20`);
+      setEvents(eventsRes.data.data || []);
+      
+      // Check if match is complete (penalty shootout finished)
+      if (res.data.data.match_complete) {
+        setMatchStatus('completed');
+        setTimerRunning(false);
+        
+        let winnerName;
+        if (newLiveScore.match_winner === 'participant1') {
+          winnerName = match.participant1_name || 'Participant 1';
+        } else if (newLiveScore.match_winner === 'participant2') {
+          winnerName = match.participant2_name || 'Participant 2';
+        } else {
+          winnerName = 'Draw';
+        }
+        
+        const regularScore = `${newLiveScore.participant1.goals}-${newLiveScore.participant2.goals}`;
+        const penaltyScore = `${newLiveScore.penalty_shootout.participant1_scored}-${newLiveScore.penalty_shootout.participant2_scored}`;
+        
+        alert(`🏆 Match Complete!\n\nWinner: ${winnerName}\n\nFinal Score: ${regularScore} (${penaltyScore} pens)`);
+        
+        // Redirect to match details page after 2 seconds
+        setTimeout(() => {
+          navigate(`/matches/${matchId}`);
+        }, 2000);
+      } else {
+        // Show penalty result
+        const resultEmoji = result === 'scored' ? '✓' : '✗';
+        alert(`${resultEmoji} Penalty ${result}!`);
+      }
+    } catch (error) {
+      console.error('Failed to record penalty kick:', error);
+      alert('Error: ' + (error.response?.data?.error || 'Failed to record penalty kick'));
+    }
+  };
+
+  const renderScoreDisplay = () => {
+    if (!liveScore || !sport) return null;
+
+    // Generic score display for all sports
+    return (
+      <div>
+        {/* Main Score */}
+        <div className="text-center mb-6">
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <div className="text-sm text-gray-600">Live Score</div>
+            {/* Show Tiebreak Indicator */}
+            {liveScore.is_tiebreak && (
+              <div className="inline-block bg-gradient-to-r from-orange-500 to-red-500 text-white px-3 py-1 rounded-full text-xs font-bold animate-pulse">
+                🎾 TIEBREAK
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-center gap-8">
+            <div className="text-center">
+              <div className="text-6xl font-bold text-emerald-600">
+                {liveScore.participant1?.games_won || liveScore.participant1?.sets_won || liveScore.participant1?.goals || 0}
+              </div>
+              <div className="text-sm text-gray-600 mt-2 font-semibold">{match.participant1_name || 'P1'}</div>
+            </div>
+            <div className="text-4xl text-gray-400">-</div>
+            <div className="text-center">
+              <div className="text-6xl font-bold text-teal-600">
+                {liveScore.participant2?.games_won || liveScore.participant2?.sets_won || liveScore.participant2?.goals || 0}
+              </div>
+              <div className="text-sm text-gray-600 mt-2 font-semibold">{match.participant2_name || 'P2'}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Penalty Shootout Display */}
+        {liveScore.is_penalty_shootout && liveScore.penalty_shootout && (
+          <div className="bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg p-6 border-2 border-yellow-400 mb-6">
+            <div className="text-center mb-4">
+              <h3 className="text-2xl font-bold text-orange-600 mb-2">
+                ⚽ PENALTY SHOOTOUT {liveScore.penalty_shootout.sudden_death && '- SUDDEN DEATH'}
+              </h3>
+              <p className="text-gray-600">
+                Regular Time: {liveScore.participant1?.goals || 0} - {liveScore.participant2?.goals || 0}
+              </p>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-4 items-center mb-4">
+              {/* Team 1 Penalty Score */}
+              <div className="text-center">
+                <div className="text-5xl font-bold text-emerald-600">
+                  {liveScore.penalty_shootout.participant1_scored}
+                </div>
+                <div className="text-sm text-gray-600 mt-1">
+                  {liveScore.penalty_shootout.participant1_attempts} attempts
+                </div>
+              </div>
+              
+              {/* Round Info */}
+              <div className="text-center">
+                <div className="text-3xl font-bold text-orange-600">
+                  Round {liveScore.penalty_shootout.current_round}
+                </div>
+                {liveScore.penalty_shootout.sudden_death ? (
+                  <div className="text-sm text-red-600 font-semibold mt-1">
+                    SUDDEN DEATH
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-600 mt-1">
+                    Best of {liveScore.penalty_shootout.max_rounds}
+                  </div>
+                )}
+              </div>
+              
+              {/* Team 2 Penalty Score */}
+              <div className="text-center">
+                <div className="text-5xl font-bold text-teal-600">
+                  {liveScore.penalty_shootout.participant2_scored}
+                </div>
+                <div className="text-sm text-gray-600 mt-1">
+                  {liveScore.penalty_shootout.participant2_attempts} attempts
+                </div>
+              </div>
+            </div>
+            
+            {/* Penalty Kicks Grid */}
+            {liveScore.penalty_shootout.kicks && liveScore.penalty_shootout.kicks.length > 0 && (
+              <div className="mt-4">
+                <h4 className="text-sm font-semibold text-gray-700 mb-2 text-center">Penalty Kicks</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Team 1 Kicks */}
+                  <div className="space-y-2">
+                    {liveScore.penalty_shootout.kicks
+                      .filter(kick => kick.participant_side === 'participant1')
+                      .map((kick, index) => (
+                        <div key={index} className="flex items-center justify-between bg-white rounded-lg p-3 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-gray-500">R{kick.round}</span>
+                            <span className="text-sm font-medium text-gray-800">{kick.player_name || 'Player'}</span>
+                          </div>
+                          <span className={`text-2xl ${
+                            kick.result === 'scored' ? 'text-green-500' : 'text-red-500'
+                          }`}>
+                            {kick.result === 'scored' ? '✓' : '✗'}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                  
+                  {/* Team 2 Kicks */}
+                  <div className="space-y-2">
+                    {liveScore.penalty_shootout.kicks
+                      .filter(kick => kick.participant_side === 'participant2')
+                      .map((kick, index) => (
+                        <div key={index} className="flex items-center justify-between bg-white rounded-lg p-3 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-gray-500">R{kick.round}</span>
+                            <span className="text-sm font-medium text-gray-800">{kick.player_name || 'Player'}</span>
+                          </div>
+                          <span className={`text-2xl ${
+                            kick.result === 'scored' ? 'text-green-500' : 'text-red-500'
+                          }`}>
+                            {kick.result === 'scored' ? '✓' : '✗'}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tiebreak Alert Banner - Tennis/Padel */}
+        {liveScore && liveScore.is_tiebreak && (
+          <>
+            <div className="bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500 rounded-lg p-4 mb-4 shadow-lg animate-pulse">
+              <div className="flex items-center justify-center gap-3">
+                <span className="text-3xl">🎾</span>
+                <div className="text-center">
+                  <p className="text-white font-bold text-2xl tracking-wide">
+                    TIEBREAK IN PROGRESS
+                  </p>
+                  <p className="text-white text-sm mt-1">
+                    {liveScore.tiebreak_type === 'match' 
+                      ? 'Final Set Match Tiebreak - First to 10 points' 
+                      : 'Regular Tiebreak - First to 7 points'}
+                  </p>
+                  <p className="text-white text-xs mt-1 font-semibold">
+                    Total Points Played: {liveScore.tiebreak_total_points || 0}
+                  </p>
+                </div>
+                <span className="text-3xl">🎾</span>
+              </div>
+            </div>
+
+            {/* Change Ends Alert - Every 6 Points */}
+            {liveScore.tiebreak_total_points > 0 && liveScore.tiebreak_total_points % 6 === 0 && (
+              <div className="bg-orange-100 border-2 border-orange-500 rounded-lg p-4 mb-4 shadow-lg animate-pulse">
+                <div className="flex items-center justify-center gap-3">
+                  <span className="text-3xl">🔄</span>
+                  <div className="text-center">
+                    <p className="text-orange-900 font-bold text-xl tracking-wide">
+                      ⚠️ CHANGE ENDS NOW ⚠️
+                    </p>
+                    <p className="text-orange-700 text-sm mt-1">
+                      Players must switch sides ({liveScore.tiebreak_total_points} points played)
+                    </p>
+                    <p className="text-orange-600 text-xs mt-1">
+                      International Rule: Change ends every 6 points in tiebreak
+                    </p>
+                  </div>
+                  <span className="text-3xl">🔄</span>
+                </div>
+              </div>
+            )}
+
+            {/* Serve Rotation Reminder */}
+            <div className="bg-blue-50 border-l-4 border-blue-500 rounded p-3 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🎾</span>
+                <div className="flex-1">
+                  <p className="font-semibold text-blue-900 text-sm">
+                    Serve Rotation Guide:
+                  </p>
+                  <p className="text-blue-700 text-xs mt-1">
+                    {liveScore.tiebreak_total_points === 0 
+                      ? "▶️ First server serves 1 point only"
+                      : liveScore.tiebreak_total_points === 1
+                        ? "⚠️ SWITCH SERVER NOW - Opponent serves next 2 points"
+                        : liveScore.tiebreak_total_points % 2 === 1
+                          ? "⚠️ SWITCH SERVER after this point (alternate every 2 points)"
+                          : "✅ Current server continues (serves 2 points total)"}
+                  </p>
+                  <p className="text-blue-600 text-xs mt-1">
+                    International Rule: First server → 1 point, then alternate every 2 points
+                  </p>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Detailed Score Breakdown */}
+        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            {/* Current Set/Game/Period Info */}
+            <div className="text-center">
+              <p className="text-gray-500 text-xs mb-1">Current</p>
+              <p className="font-bold text-gray-900">
+                {liveScore.current_game ? `Game ${liveScore.current_game}` :
+                 liveScore.current_set ? `Set ${liveScore.current_set}` : 
+                 liveScore.current_period ? `Period ${liveScore.current_period}` : 
+                 'In Progress'}
+              </p>
+            </div>
+
+            {/* Current Game/Points (Tennis/Padel: 15-30-40 format) */}
+            {liveScore.participant1?.current_game_points !== undefined && (
+              <div className="text-center">
+                <p className="text-gray-500 text-xs mb-1">
+                  {liveScore.is_tiebreak ? 'Tiebreak Points' : 'Current Points'}
+                </p>
+                <p className="font-bold text-gray-900">
+                  {convertToTennisScore(liveScore.participant1.current_game_points, liveScore.participant2.current_game_points, liveScore.is_tiebreak)} - {convertToTennisScore(liveScore.participant2.current_game_points, liveScore.participant1.current_game_points, liveScore.is_tiebreak)}
+                </p>
+                {/* Deuce/Advantage Indicator */}
+                {!liveScore.is_tiebreak && liveScore.participant1.current_game_points >= 3 && liveScore.participant2.current_game_points >= 3 && (
+                  <div className="mt-2">
+                    {liveScore.participant1.current_game_points === liveScore.participant2.current_game_points ? (
+                      <div className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs font-bold">
+                        <span>⚡</span>
+                        <span>DEUCE</span>
+                        {liveScore.current_game_deuce_count > 0 && (
+                          <span className="ml-1 bg-yellow-200 px-1.5 rounded-full">
+                            {liveScore.current_game_deuce_count}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-bold">
+                        <span>🎯</span>
+                        <span>ADV</span>
+                        <span className="ml-1">
+                          ({liveScore.participant1.current_game_points > liveScore.participant2.current_game_points ? match.participant1_name : match.participant2_name})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Set Scores for racquet sports */}
+            {liveScore.participant1?.games && (
+              <div className="text-center">
+                <p className="text-gray-500 text-xs mb-1">Games This Set</p>
+                <p className="font-bold text-gray-900">
+                  {liveScore.participant1.games[liveScore.current_set - 1] || 0} - {liveScore.participant2.games[liveScore.current_set - 1] || 0}
+                </p>
+              </div>
+            )}
+
+            {/* Current game/set score */}
+            {liveScore.participant1?.game_scores && (
+              <div className="text-center">
+                <p className="text-gray-500 text-xs mb-1">Game Score</p>
+                <p className="font-bold text-gray-900">
+                  {liveScore.participant1.game_scores[(liveScore.current_game || 1) - 1] || 0} - {liveScore.participant2.game_scores[(liveScore.current_game || 1) - 1] || 0}
+                </p>
+              </div>
+            )}
+            {liveScore.participant1?.set_scores && (
+              <div className="text-center">
+                <p className="text-gray-500 text-xs mb-1">Set Score</p>
+                <p className="font-bold text-gray-900">
+                  {liveScore.participant1.set_scores[(liveScore.current_set || 1) - 1] || 0} - {liveScore.participant2.set_scores[(liveScore.current_set || 1) - 1] || 0}
+                </p>
+              </div>
+            )}
+
+            {/* Match time for timed sports */}
+            {liveScore.match_time && (
+              <div className="text-center">
+                <p className="text-gray-500 text-xs mb-1">Time</p>
+                <p className="font-bold text-gray-900">{liveScore.match_time}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Set/Game History */}
+          {liveScore.participant1?.games && liveScore.participant1.games.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <p className="text-xs text-gray-500 mb-2 text-center">Set History</p>
+              <div className="flex justify-center gap-2">
+                {liveScore.participant1.games.map((p1Games, idx) => (
+                  <div key={idx} className={`px-3 py-1 rounded text-xs font-bold ${
+                    idx === liveScore.current_set - 1 
+                      ? 'bg-emerald-100 text-emerald-700 border-2 border-emerald-500' 
+                      : 'bg-gray-100 text-gray-700'
+                  }`}>
+                    {p1Games}-{liveScore.participant2.games[idx]}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Set scores history for volleyball/badminton */}
+          {liveScore.participant1?.set_scores && liveScore.participant1.set_scores.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <p className="text-xs text-gray-500 mb-2 text-center">Set History</p>
+              <div className="flex justify-center gap-2">
+                {liveScore.participant1.set_scores.map((p1Score, idx) => (
+                  <div key={idx} className={`px-3 py-1 rounded text-xs font-bold ${
+                    idx === liveScore.current_set - 1 
+                      ? 'bg-emerald-100 text-emerald-700 border-2 border-emerald-500' 
+                      : 'bg-gray-100 text-gray-700'
+                  }`}>
+                    {p1Score}-{liveScore.participant2.set_scores[idx]}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Sport Info */}
+        <div className="mt-4 text-center text-sm text-gray-600">
+          <p>{sport.name} • {match.tournament_category}</p>
+        </div>
+      </div>
+    );
+  };
+
+  const renderQuickActions = () => {
+    if (!sport) return null;
+
+    const actionGroups = {
+      'Tennis': [
+        { label: 'Ace', type: 'ace', color: 'yellow' },
+        { label: 'Fault', type: 'fault', color: 'orange' },
+        { label: 'Timeout', type: 'timeout', color: 'purple' },
+        { label: 'Challenge', type: 'challenge', color: 'blue' }
+      ],
+      'Badminton': [
+        { label: 'Timeout', type: 'timeout', color: 'yellow' },
+        { label: 'Fault', type: 'fault', color: 'orange' },
+        { label: 'Let', type: 'let', color: 'blue' },
+        { label: 'Challenge', type: 'challenge', color: 'purple' }
+      ],
+      'Table Tennis': [
+        { label: 'Timeout', type: 'timeout', color: 'yellow' },
+        { label: 'Let', type: 'let', color: 'blue' },
+        { label: 'Yellow', type: 'yellow_card', color: 'yellow' },
+        { label: 'Red', type: 'red_card', color: 'red' }
+      ],
+      'Squash': [
+        { label: 'Let', type: 'let', color: 'blue' },
+        { label: 'Stroke', type: 'stroke', color: 'green' },
+        { label: 'Timeout', type: 'timeout', color: 'yellow' },
+        { label: 'Conduct', type: 'conduct_warning', color: 'orange' }
+      ],
+      'Pickleball': [
+        { label: 'Timeout', type: 'timeout', color: 'yellow' },
+        { label: 'Fault', type: 'fault', color: 'orange' },
+        { label: 'Let', type: 'let', color: 'blue' },
+        { label: 'Replay', type: 'replay', color: 'purple' }
+      ],
+      'Volleyball': [
+        { label: 'Timeout', type: 'timeout', color: 'yellow' },
+        { label: 'Sub', type: 'substitution', color: 'green' },
+        { label: 'Yellow', type: 'yellow_card', color: 'yellow' },
+        { label: 'Red', type: 'red_card', color: 'red' }
+      ],
+      'Football': [
+        { label: 'Goal', type: 'goal', color: 'green' },
+        { label: 'Yellow', type: 'yellow_card', color: 'yellow' },
+        { label: 'Red', type: 'red_card', color: 'red' },
+        { label: 'Sub', type: 'substitution', color: 'blue' }
+      ],
+      'Basketball': [
+        { label: 'Timeout', type: 'timeout', color: 'yellow' },
+        { label: 'Sub', type: 'substitution', color: 'green' },
+        { label: 'Foul', type: 'foul', color: 'orange' },
+        { label: 'Tech Foul', type: 'technical_foul', color: 'red' }
+      ],
+      'Cricket': [
+        { label: 'Wicket', type: 'wicket', color: 'red' },
+        { label: 'No Ball', type: 'no_ball', color: 'orange' },
+        { label: 'Wide', type: 'wide', color: 'yellow' },
+        { label: 'Review', type: 'review', color: 'blue' }
+      ],
+      'Hockey': [
+        { label: 'Goal', type: 'goal', color: 'green' },
+        { label: 'Yellow', type: 'yellow_card', color: 'yellow' },
+        { label: 'Red', type: 'red_card', color: 'red' },
+        { label: 'Sub', type: 'substitution', color: 'blue' }
+      ]
+    };
+
+    const actions = actionGroups[sport.name];
+    if (!actions) return null;
+
+    const colorMap = {
+      yellow: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200',
+      orange: 'bg-orange-100 text-orange-700 hover:bg-orange-200',
+      purple: 'bg-purple-100 text-purple-700 hover:bg-purple-200',
+      blue: 'bg-blue-100 text-blue-700 hover:bg-blue-200',
+      green: 'bg-green-100 text-green-700 hover:bg-green-200',
+      red: 'bg-red-300 text-red-900 hover:bg-red-400'
+    };
+
+    return (
+      <div className="grid grid-cols-4 gap-2">
+        {actions.map((action) => (
+          <button
+            key={action.type}
+            onClick={() => handleRecordEvent(action.type, 'participant1')}
+            className={`py-2 text-xs font-semibold rounded ${colorMap[action.color]}`}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navbar />
+        <div className="flex items-center justify-center h-96">
+          <Loader className="w-8 h-8 animate-spin text-emerald-600" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!match || !sport) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navbar />
+        <div className="max-w-7xl mx-auto px-4 py-8">
+          <div className="text-center">
+            <AlertCircle className="w-12 h-12 text-red-600 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900">Match not found</h2>
+            <button
+              onClick={() => navigate('/matches')}
+              className="mt-4 px-6 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+            >
+              Back to Matches
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl shadow-lg p-6 text-white mb-6">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">{match.tournament_name}</h1>
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-4 h-4" />
+                  <span>{sport.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  <span className="capitalize">{match.category}</span>
+                </div>
+                {match.venue_name && (
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4" />
+                    <span>{match.venue_name}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <div className="px-4 py-2 bg-white/20 rounded-lg text-center">
+                <p className="text-xs opacity-90">Status</p>
+                <p className="font-bold capitalize">{matchStatus}</p>
+              </div>
+              {matchStatus === 'in_progress' && (
+                <>
+                  {/* Show Timer for Football, LIVE indicator for other sports */}
+                  {sport?.name === 'Football' ? (
+                    <div className="px-4 py-2 bg-white/20 rounded-lg text-center">
+                      <p className="text-xs opacity-90">Timer</p>
+                      <p className="font-bold text-2xl font-mono">{formatTimer(matchTimer)}</p>
+                      {isPaused && <p className="text-xs text-yellow-300">⏸ PAUSED</p>}
+                    </div>
+                  ) : (
+                    <div className="px-6 py-2 bg-white/20 rounded-lg text-center flex items-center gap-2 shadow-md">
+                      <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></div>
+                      <p className="font-bold text-xl tracking-wider">LIVE</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {match.match_date && (
+            <div className="flex items-center gap-2 text-sm">
+              <Clock className="w-4 h-4" />
+              <span>
+                {new Date(match.match_date).toLocaleDateString('en-US', {
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric'
+                })}
+                {match.match_time && ` • ${match.match_time}`}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Main Content */}
+        {matchStatus === 'completed' && (
+          <div className="bg-white rounded-xl shadow-lg p-8 text-center mb-6">
+            <Trophy className="w-20 h-20 text-yellow-500 mx-auto mb-4" />
+            <h2 className="text-3xl font-bold text-gray-900 mb-4">🏆 Match Complete!</h2>
+            
+            {liveScore && (
+              <div className="space-y-4">
+                <div className="text-2xl font-bold text-gray-800">
+                  {liveScore.match_winner === 'participant1' && (
+                    <span className="text-green-600">Winner: {match.participant1_name}</span>
+                  )}
+                  {liveScore.match_winner === 'participant2' && (
+                    <span className="text-green-600">Winner: {match.participant2_name}</span>
+                  )}
+                  {liveScore.match_winner === 'draw' && (
+                    <span className="text-blue-600">Match Drawn</span>
+                  )}
+                </div>
+                
+                {/* Score display based on sport type */}
+                <div className="text-4xl font-bold text-gray-900">
+                  {sport.name === 'Football' || sport.name === 'Basketball' || sport.name === 'Hockey' ? (
+                    // Time-based sports: Show goals/points
+                    <>{liveScore.participant1?.goals || 0} - {liveScore.participant2?.goals || 0}</>
+                  ) : ['Table Tennis', 'Squash', 'Pickleball'].includes(sport.name) ? (
+                    // Game-based sports: Show games won
+                    <>{liveScore.participant1?.games_won || 0} - {liveScore.participant2?.games_won || 0}</>
+                  ) : (
+                    // Set-based sports: Show sets won (Badminton, Tennis, Volleyball, Padel)
+                    <>{liveScore.participant1?.sets_won || 0} - {liveScore.participant2?.sets_won || 0}</>
+                  )}
+                </div>
+                
+                {/* Sport-specific stats */}
+                {sport.name === 'Football' && (
+                  <>
+                    {/* Penalty Shootout Score */}
+                    {liveScore.penalty_shootout && (
+                      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-lg border-2 border-yellow-400 mt-4">
+                        <p className="text-lg font-bold text-orange-600 mb-2">⚽ Penalty Shootout</p>
+                        <div className="text-3xl font-bold text-gray-900">
+                          {liveScore.penalty_shootout.participant1_scored} - {liveScore.penalty_shootout.participant2_scored}
+                        </div>
+                        <p className="text-sm text-gray-600 mt-1">
+                          ({liveScore.penalty_shootout.participant1_attempts} attempts - {liveScore.penalty_shootout.participant2_attempts} attempts)
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* Football: Show cards */}
+                    <div className="grid grid-cols-2 gap-4 mt-6 text-left">
+                      <div className="bg-gray-50 p-4 rounded-lg">
+                        <p className="text-sm text-gray-600">Yellow Cards</p>
+                        <p className="text-xl font-bold">{liveScore.participant1?.yellow_cards || 0} - {liveScore.participant2?.yellow_cards || 0}</p>
+                      </div>
+                      <div className="bg-gray-50 p-4 rounded-lg">
+                        <p className="text-sm text-gray-600">Red Cards</p>
+                        <p className="text-xl font-bold">{liveScore.participant1?.red_cards || 0} - {liveScore.participant2?.red_cards || 0}</p>
+                      </div>
+                    </div>
+                  </>
+                )}
+                
+                {['Badminton', 'Tennis', 'Volleyball', 'Pickleball', 'Padel'].includes(sport.name) && (
+                  // Set-based sports: Show set scores
+                  <div className="mt-6 text-left">
+                    <p className="text-sm text-gray-600 mb-2">Set Scores</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {liveScore.participant1?.set_scores?.map((score, idx) => (
+                        <div key={idx} className="bg-gray-50 p-3 rounded-lg text-center">
+                          <p className="text-xs text-gray-500">Set {idx + 1}</p>
+                          <p className="text-lg font-bold">{score} - {liveScore.participant2?.set_scores?.[idx] || 0}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {['Table Tennis', 'Squash'].includes(sport.name) && (
+                  // Game-based sports: Show game scores
+                  <div className="mt-6 text-left">
+                    <p className="text-sm text-gray-600 mb-2">Game Scores</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {liveScore.participant1?.game_scores?.map((score, idx) => (
+                        <div key={idx} className="bg-gray-50 p-3 rounded-lg text-center">
+                          <p className="text-xs text-gray-500">Game {idx + 1}</p>
+                          <p className="text-lg font-bold">{score} - {liveScore.participant2?.game_scores?.[idx] || 0}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Match Duration (for time-based sports) */}
+                {(sport.name === 'Football' || sport.name === 'Basketball' || sport.name === 'Hockey') && (
+                  <div className="mt-6 pt-6 border-t">
+                    <p className="text-sm text-gray-600">Match Duration</p>
+                    <p className="text-lg font-semibold">{liveScore.match_time || '00:00'}</p>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <button
+              onClick={() => navigate('/matches')}
+              className="mt-6 px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold rounded-lg hover:shadow-lg transition-all"
+            >
+              Back to Matches
+            </button>
+          </div>
+        )}
+
+        {(matchStatus === 'scheduled' || matchStatus === 'ready') && (
+          <div className="bg-white rounded-xl shadow-lg p-8 text-center mb-6">
+            <Play className="w-16 h-16 text-emerald-600 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Ready to Start?</h2>
+            <p className="text-gray-600 mb-6">
+              Both players have checked in. Click below to start the match.
+            </p>
+            
+            {/* Squad Selection for Team Sports */}
+            {match?.tournament_category === 'teams' && match.participant1_details && match.participant2_details && (
+              <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center justify-center gap-2">
+                  <Users className="w-5 h-5 text-blue-600" />
+                  Squad Selection Required
+                </h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Select playing members and assign positions for both teams before starting the match
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className={`bg-white rounded-lg p-4 border-2 transition-all ${
+                    squadStatus.team1_squad_set 
+                      ? 'border-green-400 bg-green-50' 
+                      : 'border-gray-200'
+                  }`}>
+                    <h4 className="font-semibold text-gray-900 mb-2">{match.participant1_details.name}</h4>
+                    <button
+                      onClick={() => handleOpenSquadModal(match.participant1_details.id, match.participant1_details.name)}
+                      className={`w-full px-4 py-2.5 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                        squadStatus.team1_squad_set
+                          ? 'bg-green-500 text-white hover:bg-green-600 shadow-md'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {squadStatus.team1_squad_set ? (
+                        <>
+                          <CheckCircle className="w-5 h-5" />
+                          Squad Selected
+                        </>
+                      ) : (
+                        'Select Squad'
+                      )}
+                    </button>
+                  </div>
+                  <div className={`bg-white rounded-lg p-4 border-2 transition-all ${
+                    squadStatus.team2_squad_set 
+                      ? 'border-green-400 bg-green-50' 
+                      : 'border-gray-200'
+                  }`}>
+                    <h4 className="font-semibold text-gray-900 mb-2">{match.participant2_details.name}</h4>
+                    <button
+                      onClick={() => handleOpenSquadModal(match.participant2_details.id, match.participant2_details.name)}
+                      className={`w-full px-4 py-2.5 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
+                        squadStatus.team2_squad_set
+                          ? 'bg-green-500 text-white hover:bg-green-600 shadow-md'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {squadStatus.team2_squad_set ? (
+                        <>
+                          <CheckCircle className="w-5 h-5" />
+                          Squad Selected
+                        </>
+                      ) : (
+                        'Select Squad'
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {!squadStatus.both_squads_set && (
+                  <p className="text-xs text-orange-600 mt-3 font-medium">
+                    ⚠️ Both squads must be selected before starting the match
+                  </p>
+                )}
+              </div>
+            )}
+            
+            <button
+              onClick={handleStartMatch}
+              disabled={match?.tournament_category === 'teams' && !squadStatus.both_squads_set}
+              className={`px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold rounded-lg transition-all ${
+                match?.tournament_category === 'teams' && !squadStatus.both_squads_set
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:shadow-lg'
+              }`}
+            >
+              🏁 START MATCH
+            </button>
+
+            {/* Declare Winner Section */}
+            {console.log("match value====",match)}
+            <div className="mt-10 pt-8 border-t-2 border-gray-300">
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Or Declare Winner Directly</h3>
+              <p className="text-sm text-gray-600 mb-6">
+                If the match cannot be played or you need to declare a winner without scoring
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
+                <button
+                  onClick={() => handleDeclareWinner('participant1')}
+                  className="py-5 px-6 bg-gradient-to-br from-yellow-500 to-yellow-600 text-white font-bold text-lg rounded-lg hover:shadow-xl transition-all flex items-center justify-center gap-2"
+                >
+                  <Trophy className="w-6 h-6" />
+                  Declare {match.participant1_name || 'Participant 1'} Winner
+                </button>
+                <button
+                  onClick={() => handleDeclareWinner('participant2')}
+                  className="py-5 px-6 bg-gradient-to-br from-yellow-500 to-yellow-600 text-white font-bold text-lg rounded-lg hover:shadow-xl transition-all flex items-center justify-center gap-2"
+                >
+                  <Trophy className="w-6 h-6" />
+                  Declare {match.participant2_name || 'Participant 2'} Winner
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {matchStatus === 'in_progress' && (
+          <>
+            {/* Match Resumed Notification */}
+            {liveScore && (
+              <div className="bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 rounded-lg p-4 mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="bg-blue-500 text-white rounded-full p-2">
+                    <Play className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-blue-900">Match In Progress</p>
+                    <p className="text-sm text-blue-700">
+                      {isPaused ? '⏸️ Match is paused - Click Resume to continue' : '✓ Match is live - Scoring enabled'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Football Manual Half Control Panel */}
+            {sport.name === 'Football' && matchStatus === 'in_progress' && (
+              <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                <h3 className="font-bold text-gray-900 mb-4">⚽ Match Control</h3>
+                
+                {/* Debug Info */}
+                {console.log('🔍 Button State:', { currentHalf, isPaused, isOnBreak, half_1_duration: liveScore?.half_1_duration })}
+                
+                {/* Debug Panel - Remove after testing */}
+                <div className="mb-3 p-2 bg-gray-100 rounded text-xs">
+                  <strong>Debug:</strong> Half={currentHalf} | Paused={isPaused ? 'Yes' : 'No'} | Break={isOnBreak ? 'Yes' : 'No'}
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  {/* End 1st Half Button - Auto-starts break */}
+                  {currentHalf === 1 && !isOnBreak && !liveScore?.half_1_ended && (
+                    <button
+                      onClick={handleEndHalf}
+                      className="py-4 px-4 rounded-lg font-semibold transition-all bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg hover:shadow-xl"
+                    >
+                      <div className="text-2xl mb-1">⏸️</div>
+                      <div className="text-sm">END 1ST HALF</div>
+                      <div className="text-xs opacity-75 mt-1">(Auto-starts break)</div>
+                    </button>
+                  )}
+                  
+                  {/* End Break Button - Auto-starts next half */}
+                  {isOnBreak && currentHalf === 1 && (
+                    <button
+                      onClick={handleEndBreak}
+                      className="py-4 px-4 rounded-lg font-semibold transition-all bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg hover:shadow-xl"
+                    >
+                      <div className="text-2xl mb-1">✅</div>
+                      <div className="text-sm">END BREAK</div>
+                      <div className="text-xs opacity-75 mt-1">(Auto-starts 2nd half)</div>
+                    </button>
+                  )}
+                  
+                  {/* End 2nd Half Button */}
+                  {currentHalf === 2 && !isOnBreak && (
+                    <button
+                      onClick={handleEndHalf}
+                      className="py-4 px-4 rounded-lg font-semibold transition-all bg-gradient-to-r from-red-500 to-red-600 text-white shadow-lg hover:shadow-xl"
+                    >
+                      <div className="text-2xl mb-1">⏹️</div>
+                      <div className="text-sm">END 2ND HALF</div>
+                      <div className="text-xs opacity-75 mt-1">(Match complete)</div>
+                    </button>
+                  )}
+                </div>
+                
+                {/* Status Info */}
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg text-center text-sm">
+                  {currentHalf === 1 && !isOnBreak && !isPaused && (
+                    <span className="text-blue-700 font-semibold">🟢 1st Half in Progress</span>
+                  )}
+                  {currentHalf === 1 && isPaused && !isOnBreak && (
+                    <span className="text-orange-700 font-semibold">⏸️ 1st Half Ended - Ready for Break</span>
+                  )}
+                  {isOnBreak && currentHalf === 1 && (
+                    <span className="text-blue-700 font-semibold">☕ Half-Time Break in Progress</span>
+                  )}
+                  {currentHalf === 2 && !isOnBreak && !isPaused && (
+                    <span className="text-green-700 font-semibold">🟢 2nd Half in Progress</span>
+                  )}
+                  {currentHalf === 2 && isPaused && (
+                    <span className="text-red-700 font-semibold">🏁 2nd Half Ended - Ready to End Match</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Sport-Specific Scoring Interfaces */}
+            {sport.name === 'Football' ? (
+              // TIME-BASED: Football
+              <FootballScoringInterface
+                match={match}
+                liveScore={liveScore}
+                onAddGoal={handleAddGoal}
+                onAddEvent={handleRecordEvent}
+                onAddTime={handleAddTime}
+                onRecordPenalty={handleRecordPenalty}
+                onUndo={handleUndoPoint}
+                matchTimer={matchTimer}
+                periodDuration={periodDuration}
+              />
+            ) : ['Tennis', 'Padel'].includes(sport.name) ? (
+              // SET-BASED: Tennis, Padel
+              <>
+                {console.log('🎾 Rendering SET-BASED interface for:', sport.name)}
+                <SetBasedScoringInterface
+                  match={match}
+                  liveScore={liveScore}
+                  sport={sport}
+                  onAddPoint={handleAddPoint}
+                  onToggleServer={handleToggleServer}
+                  onUndo={handleUndoPoint}
+                />
+              </>
+            ) : ['Badminton', 'Table Tennis', 'Squash', 'Pickleball', 'Volleyball'].includes(sport.name) ? (
+              // GAME-BASED: Badminton, Table Tennis, Squash, Pickleball, Volleyball
+              <>
+                {console.log('🏓 Rendering GAME-BASED interface for:', sport.name)}
+                <GameBasedScoringInterface
+                  match={match}
+                  liveScore={liveScore}
+                  sport={sport}
+                  onAddPoint={handleAddPoint}
+                  onToggleServer={handleToggleServer}
+                  onUndo={handleUndoPoint}
+                />
+              </>
+            ) : (
+              // FALLBACK: Generic scoring for unsupported sports
+              <>
+                <div className="bg-white rounded-xl shadow-lg p-8 mb-6">
+                  {renderScoreDisplay()}
+                  
+                  {/* Match Complete Banner */}
+                  {liveScore?.match_complete && (
+                    <div className="mt-6 bg-gradient-to-r from-yellow-400 to-yellow-500 text-white p-6 rounded-lg text-center">
+                      <Trophy className="w-12 h-12 mx-auto mb-2" />
+                      <h3 className="text-2xl font-bold">🏆 Match Complete!</h3>
+                      <p className="text-lg mt-2">
+                        Winner: {
+                          liveScore.match_winner === 'participant1' 
+                            ? match.participant1_name 
+                            : liveScore.match_winner === 'participant2'
+                            ? match.participant2_name
+                            : 'Draw'
+                        }
+                      </p>
+                      <p className="text-sm mt-1">
+                        Final Score: {
+                          // Game-based sports (Table Tennis, Squash, Pickleball)
+                          ['Table Tennis', 'Squash', 'Pickleball'].includes(match?.sport_name) && liveScore.participant1?.games_won !== undefined
+                          ? `${liveScore.participant1.games_won} - ${liveScore.participant2.games_won} Games`
+                          // Set-based sports (Tennis, Badminton, Volleyball, Padel)
+                          : liveScore.participant1?.sets_won !== undefined 
+                          ? `${liveScore.participant1.sets_won} - ${liveScore.participant2.sets_won} Sets`
+                          // Time-based sports (Football)
+                          : liveScore.participant1?.goals !== undefined
+                          ? `${liveScore.participant1.goals} - ${liveScore.participant2.goals} Goals`
+                          : '0 - 0'
+                        }
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 mb-6">
+                  <button
+                    onClick={() => handleAddPoint('participant1')}
+                    disabled={liveScore?.match_complete}
+                    className={`py-6 font-bold text-xl rounded-lg transition-all ${
+                      liveScore?.match_complete 
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                        : 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white hover:shadow-lg'
+                    }`}
+                  >
+                    <Plus className="w-6 h-6 inline mr-2" />
+                    POINT {match.participant1_name?.split(' ')[0] || 'P1'}
+                  </button>
+                  <button
+                    onClick={() => handleAddPoint('participant2')}
+                    disabled={liveScore?.match_complete}
+                    className={`py-6 font-bold text-xl rounded-lg transition-all ${
+                      liveScore?.match_complete 
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                        : 'bg-gradient-to-br from-teal-500 to-teal-600 text-white hover:shadow-lg'
+                    }`}
+                  >
+                    <Plus className="w-6 h-6 inline mr-2" />
+                    POINT {match.participant2_name?.split(' ')[0] || 'P2'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+              <h3 className="font-bold text-gray-900 mb-4">Quick Actions</h3>
+              {renderQuickActions()}
+            </div> */}
+
+            <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+              <h3 className="font-bold text-gray-900 mb-4">Match Events Log</h3>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {events.length > 0 ? (
+                  events.slice(0, 20).map((event, idx) => {
+                    const teamName = event.participant_side === 'participant1' 
+                      ? match.participant1_name 
+                      : match.participant2_name;
+                    
+                    let eventIcon = '⚡';
+                    let eventColor = 'bg-gray-50 border-l-4 border-gray-400';
+                    let eventDescription = '';
+                    
+                    // Generate detailed event description based on event type
+                    if (event.event_type === 'goal') {
+                      eventIcon = '⚽';
+                      eventColor = 'bg-green-50 border-l-4 border-green-500';
+                      const goalType = event.metadata?.goal_type || 'open_play';
+                      const goalTypeLabel = goalType === 'open_play' ? '' : ` (${goalType.replace('_', ' ')})`;
+                      
+                      // Use stored excitement from database (generated once when event was created)
+                      const goalExcitement = event.metadata?.excitement || 'GOAL!';
+                      
+                      if (event.player_name) {
+                        eventDescription = `${goalExcitement} ${event.player_name} scored a goal${goalTypeLabel}`;
+                        if (event.assist_player_name) {
+                          eventDescription += ` • Assist: ${event.assist_player_name}`;
+                        }
+                      } else {
+                        eventDescription = `${goalExcitement} Goal scored${goalTypeLabel}`;
+                      }
+                    } else if (event.event_type === 'yellow_card') {
+                      eventIcon = '🟨';
+                      eventColor = 'bg-yellow-50 border-l-4 border-yellow-500';
+                      eventDescription = event.player_name 
+                        ? `${event.player_name} received a yellow card`
+                        : 'Yellow card issued';
+                      if (event.metadata?.reason) {
+                        eventDescription += ` • ${event.metadata.reason}`;
+                      }
+                    } else if (event.event_type === 'red_card') {
+                      eventIcon = '🟥';
+                      eventColor = 'bg-red-50 border-l-4 border-red-500';
+                      eventDescription = event.player_name 
+                        ? `${event.player_name} received a red card`
+                        : 'Red card issued';
+                      if (event.metadata?.reason) {
+                        eventDescription += ` • ${event.metadata.reason}`;
+                      }
+                    } else if (event.event_type === 'substitution') {
+                      eventIcon = '🔄';
+                      eventColor = 'bg-blue-50 border-l-4 border-blue-500';
+                      
+                      // Show both player OUT and player IN
+                      if (event.player_name && event.metadata?.player_in_name) {
+                        eventDescription = `🔴 ${event.player_name} OUT • 🟢 ${event.metadata.player_in_name} IN`;
+                      } else if (event.player_name) {
+                        eventDescription = `${event.player_name} substituted`;
+                      } else {
+                        eventDescription = 'Substitution made';
+                      }
+                    } else if (event.event_type === 'point') {
+                      // Check if this is a server change event
+                      if (event.event_subtype === 'server_change') {
+                        eventIcon = '🎾';
+                        eventColor = 'bg-yellow-50 border-l-4 border-yellow-400';
+                        eventDescription = event.notes || 'Server changed';
+                      } else {
+                        // Regular point event
+                        eventIcon = '🎯';
+                        eventColor = 'bg-emerald-50 border-l-4 border-emerald-500';
+                        
+                        // Get current set/game info from score snapshot
+                        const snapshot = event.score_snapshot;
+                        let currentSetGame = '';
+                        let currentScore = '';
+                        
+                        if (snapshot) {
+                          // Determine if set-based or game-based
+                          if (snapshot.current_set) {
+                            currentSetGame = `Set ${snapshot.current_set}`;
+                            // Get current set score
+                            const p1SetScore = snapshot.participant1?.set_scores?.[snapshot.current_set - 1] || 0;
+                            const p2SetScore = snapshot.participant2?.set_scores?.[snapshot.current_set - 1] || 0;
+                            currentScore = `${p1SetScore}-${p2SetScore}`;
+                          } else if (snapshot.current_game) {
+                            currentSetGame = `Game ${snapshot.current_game}`;
+                            // Get current game score
+                            const p1GameScore = snapshot.participant1?.game_scores?.[snapshot.current_game - 1] || 0;
+                            const p2GameScore = snapshot.participant2?.game_scores?.[snapshot.current_game - 1] || 0;
+                            currentScore = `${p1GameScore}-${p2GameScore}`;
+                          }
+                        }
+                      
+                      // Add exciting expressions based on sport
+                      let excitingWords = [];
+                      
+                      // Sport-specific expressions
+                      if (sport.name === 'Badminton') {
+                        excitingWords = [
+                          'Excellent smash!', 'Great shuttle!', 'Nice drop shot!', 'Perfect clear!',
+                          'Brilliant rally!', 'Fantastic net play!', 'Amazing smash!', 'Superb defense!',
+                          'What a rally!', 'Incredible speed!', 'Outstanding placement!', 'Beautiful shot!',
+                          'Ace!', 'Powerful smash!', 'Deceptive shot!', 'Quick reflexes!'
+                        ];
+                      } else if (sport.name === 'Tennis') {
+                        excitingWords = [
+                          'Ace!', 'Great serve!', 'Perfect volley!', 'Brilliant backhand!',
+                          'Fantastic forehand!', 'Amazing rally!', 'Superb return!', 'What a shot!',
+                          'Incredible spin!', 'Outstanding placement!', 'Beautiful winner!', 'Powerful serve!',
+                          'Drop shot!', 'Smash!', 'Great baseline play!', 'Perfect timing!'
+                        ];
+                      } else if (sport.name === 'Table Tennis') {
+                        excitingWords = [
+                          'Lightning fast!', 'Great spin!', 'Perfect smash!', 'Brilliant rally!',
+                          'Fantastic backhand!', 'Amazing forehand!', 'Superb defense!', 'What a shot!',
+                          'Incredible reflexes!', 'Outstanding control!', 'Beautiful topspin!', 'Quick hands!',
+                          'Powerful smash!', 'Deceptive serve!', 'Great placement!', 'Ace serve!'
+                        ];
+                      } else if (sport.name === 'Squash') {
+                        excitingWords = [
+                          'Great shot!', 'Perfect drop!', 'Brilliant rally!', 'Fantastic volley!',
+                          'Amazing boast!', 'Superb defense!', 'What a rally!', 'Incredible speed!',
+                          'Outstanding placement!', 'Beautiful shot!', 'Powerful drive!', 'Quick reflexes!',
+                          'Perfect nick!', 'Great court coverage!', 'Excellent control!', 'Ace!'
+                        ];
+                      } else if (sport.name === 'Volleyball') {
+                        excitingWords = [
+                          'Great spike!', 'Perfect set!', 'Brilliant block!', 'Fantastic dig!',
+                          'Amazing serve!', 'Superb defense!', 'What a rally!', 'Incredible save!',
+                          'Outstanding block!', 'Beautiful spike!', 'Powerful serve!', 'Quick hands!',
+                          'Ace serve!', 'Great teamwork!', 'Perfect timing!', 'Excellent rotation!'
+                        ];
+                      } else if (sport.name === 'Pickleball') {
+                        excitingWords = [
+                          'Great dink!', 'Perfect volley!', 'Brilliant rally!', 'Fantastic shot!',
+                          'Amazing placement!', 'Superb defense!', 'What a rally!', 'Incredible control!',
+                          'Outstanding shot!', 'Beautiful dink!', 'Powerful smash!', 'Quick reflexes!',
+                          'Ace serve!', 'Great kitchen play!', 'Perfect drop!', 'Excellent touch!'
+                        ];
+                      } else {
+                        // Generic expressions for other sports
+                        excitingWords = [
+                          'Excellent!', 'Great shot!', 'Nice point!', 'Well played!',
+                          'Brilliant!', 'Fantastic!', 'Amazing!', 'Superb!',
+                          'What a rally!', 'Good one!', 'Perfect!', 'Outstanding!'
+                        ];
+                      }
+                      
+                      const randomExcitement = excitingWords[Math.floor(Math.random() * excitingWords.length)];
+                      
+                      // Build description with excitement
+                      eventDescription = `${randomExcitement} ${teamName} scored a point`;
+                      if (currentSetGame) {
+                        eventDescription += ` in ${currentSetGame}`;
+                      }
+                      if (currentScore) {
+                        eventDescription += ` (${currentScore})`;
+                      }
+                      
+                      // Check if set/game was won
+                      if (event.metadata?.set_won) {
+                        eventIcon = '🏆';
+                        eventColor = 'bg-yellow-50 border-l-4 border-yellow-500';
+                        
+                        // Sport-specific win expressions
+                        let winExpressions = [];
+                        if (sport.name === 'Badminton') {
+                          winExpressions = [
+                            'Dominant performance!', 'Set won!', 'Unstoppable!', 'What a set!',
+                            'Brilliant set victory!', 'Phenomenal play!', 'Outstanding set!', 'Champion mindset!'
+                          ];
+                        } else if (sport.name === 'Tennis') {
+                          winExpressions = [
+                            'Set point!', 'What a set!', 'Incredible set!', 'Dominant set!',
+                            'Brilliant tennis!', 'Outstanding performance!', 'Set won!', 'Unstoppable!'
+                          ];
+                        } else if (sport.name === 'Volleyball') {
+                          winExpressions = [
+                            'Set won!', 'Dominant set!', 'What a set!', 'Incredible teamwork!',
+                            'Outstanding set!', 'Brilliant volleyball!', 'Unstoppable!', 'Perfect execution!'
+                          ];
+                        } else {
+                          winExpressions = ['Amazing!', 'Incredible!', 'Fantastic!', 'Outstanding!', 'Brilliant!', 'Phenomenal!', 'Unstoppable!', 'Dominant!'];
+                        }
+                        
+                        const winExcitement = winExpressions[Math.floor(Math.random() * winExpressions.length)];
+                        eventDescription = `${winExcitement} ${teamName} won ${currentSetGame}!`;
+                        if (currentScore) {
+                          eventDescription += ` Final score: ${currentScore}`;
+                        }
+                      } else if (event.metadata?.game_won) {
+                        eventIcon = '🏆';
+                        eventColor = 'bg-yellow-50 border-l-4 border-yellow-500';
+                        
+                        // Sport-specific game win expressions
+                        let winExpressions = [];
+                        if (sport.name === 'Table Tennis') {
+                          winExpressions = [
+                            'Game won!', 'Lightning victory!', 'What a game!', 'Incredible speed!',
+                            'Dominant game!', 'Outstanding control!', 'Brilliant game!', 'Unstoppable!'
+                          ];
+                        } else if (sport.name === 'Squash') {
+                          winExpressions = [
+                            'Game won!', 'What a game!', 'Incredible stamina!', 'Dominant performance!',
+                            'Outstanding game!', 'Brilliant squash!', 'Unstoppable!', 'Perfect game!'
+                          ];
+                        } else if (sport.name === 'Pickleball') {
+                          winExpressions = [
+                            'Game won!', 'What a game!', 'Incredible control!', 'Dominant play!',
+                            'Outstanding game!', 'Brilliant pickleball!', 'Unstoppable!', 'Perfect execution!'
+                          ];
+                        } else {
+                          winExpressions = ['Amazing!', 'Incredible!', 'Fantastic!', 'Outstanding!', 'Brilliant!', 'Phenomenal!', 'Unstoppable!', 'Dominant!'];
+                        }
+                        
+                        const winExcitement = winExpressions[Math.floor(Math.random() * winExpressions.length)];
+                        eventDescription = `${winExcitement} ${teamName} won ${currentSetGame}!`;
+                        if (currentScore) {
+                          eventDescription += ` Final score: ${currentScore}`;
+                        }
+                      }
+                      }
+                    } else if (event.event_type === 'penalty_kick') {
+                      eventIcon = '⚽';
+                      const result = event.metadata?.result || 'unknown';
+                      
+                      if (result === 'scored') {
+                        eventColor = 'bg-green-50 border-l-4 border-green-500';
+                        eventIcon = '✅';
+                      } else if (result === 'missed') {
+                        eventColor = 'bg-red-50 border-l-4 border-red-500';
+                        eventIcon = '❌';
+                      } else if (result === 'saved') {
+                        eventColor = 'bg-orange-50 border-l-4 border-orange-500';
+                        eventIcon = '🧤';
+                      }
+                      
+                      // Build proper message
+                      if (result === 'saved') {
+                        const goalkeeperName = event.metadata?.goalkeeper_name;
+                        if (goalkeeperName) {
+                          eventDescription = `Penalty kick saved by ${goalkeeperName}`;
+                        } else {
+                          eventDescription = `Penalty kick saved by Goalkeeper`;
+                        }
+                      } else if (event.player_name) {
+                        eventDescription = `Penalty kick ${result} by ${event.player_name}`;
+                      } else {
+                        eventDescription = `Penalty kick ${result}`;
+                      }
+                    } else if (event.event_type === 'match_start') {
+                      eventIcon = '⚡';
+                      eventColor = 'bg-blue-50 border-l-4 border-blue-500';
+                      eventDescription = 'Match Started';
+                    } else if (event.event_type === 'half_1_end') {
+                      eventIcon = '⏸️';
+                      eventColor = 'bg-orange-50 border-l-4 border-orange-500';
+                      eventDescription = 'First Half Ended';
+                    } else if (event.event_type === 'half_2_start') {
+                      eventIcon = '▶️';
+                      eventColor = 'bg-green-50 border-l-4 border-green-500';
+                      eventDescription = 'Second Half Started';
+                    } else if (event.event_type === 'half_2_end') {
+                      eventIcon = '⏹️';
+                      eventColor = 'bg-red-50 border-l-4 border-red-500';
+                      eventDescription = 'Second Half Ended';
+                    } else if (event.event_type === 'break_start') {
+                      eventIcon = '☕';
+                      eventColor = 'bg-yellow-50 border-l-4 border-yellow-500';
+                      eventDescription = 'Break Time Started';
+                    } else if (event.event_type === 'break_end') {
+                      eventIcon = '▶️';
+                      eventColor = 'bg-green-50 border-l-4 border-green-500';
+                      eventDescription = 'Break Time Ended';
+                    } else if (event.event_type === 'match_complete') {
+                      eventIcon = '🏆';
+                      eventColor = 'bg-purple-50 border-l-4 border-purple-500';
+                      eventDescription = 'Match Completed';
+                    } else {
+                      eventDescription = event.event_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    }
+                    
+                    return (
+                      <div key={idx} className={`p-3 rounded ${eventColor}`}>
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-start gap-3 flex-1">
+                            <span className="text-2xl">{eventIcon}</span>
+                            <div className="flex-1">
+                              <div className="font-semibold text-gray-900">
+                                {eventDescription}
+                              </div>
+                              <div className="text-sm text-gray-600 mt-1">
+                                {teamName}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right ml-4">
+                            <div className="text-sm font-bold text-gray-700">
+                              {/* For set-based sports: show current set */}
+                              {event.current_set && !event.current_game ? (
+                                `Set ${event.current_set}`
+                              ) : event.current_game ? (
+                                /* For game-based sports: show current game */
+                                `Game ${event.current_game}`
+                              ) : event.match_time ? (
+                                /* For time-based sports: show rounded minute */
+                                event.match_time
+                              ) : (
+                                'N/A'
+                              )}
+                            </div>
+                            {event.score_snapshot && (
+                              <div className="text-xs text-gray-500 mt-1">
+                                {event.score_snapshot.participant1?.sets_won !== undefined 
+                                  ? `Sets: ${event.score_snapshot.participant1.sets_won}-${event.score_snapshot.participant2.sets_won}`
+                                  : event.score_snapshot.participant1?.games_won !== undefined
+                                  ? `Games: ${event.score_snapshot.participant1.games_won}-${event.score_snapshot.participant2.games_won}`
+                                  : event.score_snapshot.participant1?.goals !== undefined
+                                  ? `Goals: ${event.score_snapshot.participant1.goals}-${event.score_snapshot.participant2.goals}`
+                                  : ''}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-gray-500 text-sm text-center py-4">No events recorded yet</p>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons - Only END MATCH */}
+            <div className="mb-6">
+              <button
+                onClick={() => setShowEndMatchModal(true)}
+                className="w-full py-4 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition-all flex items-center justify-center gap-2 text-lg"
+              >
+                <Square className="w-6 h-6" />
+                END MATCH
+              </button>
+            </div>
+
+            {/* Draw Decision Modal */}
+            {showDrawDecisionModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-8">
+                  <div className="text-center mb-6">
+                    <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Trophy className="w-12 h-12 text-blue-600" />
+                    </div>
+                    <h2 className="text-3xl font-bold text-gray-900 mb-2">Match is a Draw!</h2>
+                    <p className="text-gray-600 text-lg">
+                      Score: {liveScore?.participant1?.goals || 0} - {liveScore?.participant2?.goals || 0}
+                    </p>
+                    <p className="text-gray-500 mt-2">
+                      Choose how to proceed:
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 mb-6">
+                    {/* Option 1: Declare Draw */}
+                    <button
+                      onClick={handleDeclareDraw}
+                      className="w-full py-6 px-6 bg-gradient-to-br from-gray-500 to-gray-600 text-white font-bold text-lg rounded-xl hover:shadow-xl transition-all flex items-center justify-center gap-3"
+                    >
+                      <Trophy className="w-6 h-6" />
+                      Declare Match as Draw
+                    </button>
+
+                    {/* Option 2: Penalties */}
+                    <button
+                      onClick={handleStartPenalties}
+                      className="w-full py-6 px-6 bg-gradient-to-br from-orange-500 to-red-600 text-white font-bold text-lg rounded-xl hover:shadow-xl transition-all flex items-center justify-center gap-3"
+                    >
+                      ⚽ Go to Penalty Shootout
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setShowDrawDecisionModal(false)}
+                    className="w-full py-3 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* End Match Confirmation Modal */}
+            {showEndMatchModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-8">
+                  <div className="text-center mb-6">
+                    <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <AlertCircle className="w-12 h-12 text-red-600" />
+                    </div>
+                    <h2 className="text-3xl font-bold text-gray-900 mb-2">End Match?</h2>
+                    <p className="text-gray-600 text-lg">
+                      Are you sure you want to end this match?
+                    </p>
+                  </div>
+
+                  <div className="bg-yellow-50 border-l-4 border-yellow-500 p-4 mb-6">
+                    <div className="flex items-start gap-3">
+                      <Trophy className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <h3 className="font-bold text-yellow-900 mb-1">Declare Winner</h3>
+                        <p className="text-sm text-yellow-800">
+                          Select the winner to end the match (walkover, injury, disqualification, etc.)
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <button
+                      onClick={() => {
+                        setShowEndMatchModal(false);
+                        handleDeclareWinner('participant1');
+                      }}
+                      className="py-6 px-6 bg-gradient-to-br from-yellow-500 to-yellow-600 text-white font-bold text-lg rounded-xl hover:shadow-xl transition-all flex items-center justify-center gap-3"
+                    >
+                      <Trophy className="w-6 h-6" />
+                      Declare {match.participant1_name || 'Participant 1'} Winner
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowEndMatchModal(false);
+                        handleDeclareWinner('participant2');
+                      }}
+                      className="py-6 px-6 bg-gradient-to-br from-yellow-500 to-yellow-600 text-white font-bold text-lg rounded-xl hover:shadow-xl transition-all flex items-center justify-center gap-3"
+                    >
+                      <Trophy className="w-6 h-6" />
+                      Declare {match.participant2_name || 'Participant 2'} Winner
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setShowEndMatchModal(false)}
+                    className="w-full py-3 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      
+      {/* Server Selection Modal */}
+      {showServerSelectionModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-8 animate-fadeIn">
+            <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">Who Serves First?</h2>
+            <p className="text-gray-600 mb-8 text-center">Select which {match?.tournament_category === 'teams' ? 'team' : match?.tournament_category === 'doubles' ? 'pair' : 'player'} will serve first</p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              {/* Participant 1 */}
+              <button
+                onClick={() => {
+                  setSelectedFirstServer('participant1');
+                  setShowServerSelectionModal(false);
+                  startMatchWithServer('participant1');
+                }}
+                className="group relative bg-gradient-to-br from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 border-3 border-emerald-300 hover:border-emerald-500 rounded-xl p-8 transition-all duration-300 hover:shadow-xl hover:scale-105"
+              >
+                <div className="text-center">
+                  <div className="w-20 h-20 bg-emerald-500 rounded-full mx-auto mb-4 flex items-center justify-center text-white text-3xl font-bold shadow-lg group-hover:scale-110 transition-transform">
+                    1
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                    {match?.participant1_name || 'Participant 1'}
+                  </h3>
+                  <p className="text-sm text-gray-600">Click to select as first server</p>
+                </div>
+                <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="bg-emerald-500 text-white rounded-full p-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                </div>
+              </button>
+              
+              {/* Participant 2 */}
+              <button
+                onClick={() => {
+                  setSelectedFirstServer('participant2');
+                  setShowServerSelectionModal(false);
+                  startMatchWithServer('participant2');
+                }}
+                className="group relative bg-gradient-to-br from-blue-50 to-cyan-50 hover:from-blue-100 hover:to-cyan-100 border-3 border-blue-300 hover:border-blue-500 rounded-xl p-8 transition-all duration-300 hover:shadow-xl hover:scale-105"
+              >
+                <div className="text-center">
+                  <div className="w-20 h-20 bg-blue-500 rounded-full mx-auto mb-4 flex items-center justify-center text-white text-3xl font-bold shadow-lg group-hover:scale-110 transition-transform">
+                    2
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                    {match?.participant2_name || 'Participant 2'}
+                  </h3>
+                  <p className="text-sm text-gray-600">Click to select as first server</p>
+                </div>
+                <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="bg-blue-500 text-white rounded-full p-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                </div>
+              </button>
+            </div>
+            
+            <button
+              onClick={() => setShowServerSelectionModal(false)}
+              className="w-full py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Squad Selection Modal */}
+      {showSquadModal && currentSquadTeam && (
+        <SquadSelectionModal
+          isOpen={showSquadModal}
+          onClose={() => setShowSquadModal(false)}
+          matchId={matchId}
+          teamId={currentSquadTeam.id}
+          teamName={currentSquadTeam.name}
+          onSquadSaved={handleSquadSaved}
+        />
+      )}
+    </div>
+  );
+};
+
+export default RefereeLiveScoring;

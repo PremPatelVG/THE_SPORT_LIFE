@@ -1,0 +1,300 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { fetchMyTournaments, clearError } from '../store/slices/tournamentSlice';
+import { formatDate, formatDateTime } from '../utils/dateFormatter';
+import {
+  Trophy,
+  Calendar,
+  MapPin,
+  DollarSign,
+  CheckCircle,
+  Clock,
+  XCircle,
+  AlertCircle,
+  ArrowRight,
+  Filter,
+  Search
+} from 'lucide-react';
+
+const MyRegistrations = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { myTournaments, loading, error } = useSelector((state) => state.tournament);
+  const { user } = useSelector((state) => state.auth);
+
+  const [filter, setFilter] = useState('all'); // all, upcoming, ongoing, completed
+  const [searchTerm, setSearchTerm] = useState('');
+
+  useEffect(() => {
+    dispatch(fetchMyTournaments());
+  }, [dispatch]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+    };
+  }, [dispatch]);
+
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      registered: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Registered', icon: Clock },
+      confirmed: { bg: 'bg-primary-100', text: 'text-primary-600', label: 'Confirmed', icon: CheckCircle },
+      withdrawn: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Withdrawn', icon: XCircle },
+      disqualified: { bg: 'bg-red-100', text: 'text-red-700', label: 'Disqualified', icon: AlertCircle }
+    };
+
+    const config = statusConfig[status] || statusConfig.registered;
+    const Icon = config.icon;
+
+    return (
+      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${config.bg} ${config.text}`}>
+        <Icon className="w-3 h-3" />
+        {config.label}
+      </span>
+    );
+  };
+
+  const getPaymentBadge = (paymentStatus) => {
+    if (paymentStatus === 'paid') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-primary-100 text-primary-600">
+          <CheckCircle className="w-3 h-3" />
+          Paid
+        </span>
+      );
+    }
+    if (paymentStatus === 'pending') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">
+          <Clock className="w-3 h-3" />
+          Payment Pending
+        </span>
+      );
+    }
+    return null;
+  };
+
+  const getTournamentStatusBadge = (status) => {
+    const statusConfig = {
+      draft: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Draft' },
+      open: { bg: 'bg-primary-100', text: 'text-primary-600', label: 'Open' },
+      closed: { bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'Closed' },
+      ongoing: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Ongoing' },
+      completed: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Completed' },
+      cancelled: { bg: 'bg-red-100', text: 'text-red-700', label: 'Cancelled' }
+    };
+
+    const config = statusConfig[status] || statusConfig.draft;
+    return (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${config.bg} ${config.text}`}>
+        {config.label}
+      </span>
+    );
+  };
+
+  // Ensure myTournaments is an array and filter
+  const tournamentsArray = Array.isArray(myTournaments) ? myTournaments : [];
+  const filteredTournaments = tournamentsArray.filter(tournament => {
+    // Filter by status
+    if (filter === 'upcoming' && tournament.tournament_status !== 'open') return false;
+    if (filter === 'ongoing' && tournament.tournament_status !== 'ongoing') return false;
+    if (filter === 'completed' && tournament.tournament_status !== 'completed') return false;
+
+    // Filter by search term
+    if (searchTerm && !tournament.tournament_name?.toLowerCase().includes(searchTerm.toLowerCase())) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+      {/* Header */}
+      <header className="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-200 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl p-2 shadow-lg">
+                <Trophy className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-primary-500 to-primary-600 bg-clip-text text-transparent">
+                  My Registrations
+                </h1>
+                <p className="text-sm text-gray-600">Track your tournament participations</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Filters */}
+        <div className="bg-white rounded-2xl shadow-lg p-6 mb-8 border border-gray-100">
+          <div className="flex flex-col md:flex-row gap-4">
+            {/* Search */}
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Search tournaments..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none"
+              />
+            </div>
+
+            {/* Status Filter */}
+            <div className="flex gap-2">
+              {['all', 'upcoming', 'ongoing', 'completed'].map((status) => (
+                <button
+                  key={status}
+                  onClick={() => setFilter(status)}
+                  className={`px-4 py-3 rounded-lg font-semibold transition-all capitalize ${
+                    filter === status
+                      ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white shadow-lg'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg mb-6">
+            <p className="text-sm">{error}</p>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {loading && (
+          <div className="text-center py-16">
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary-200 border-t-primary-500 mx-auto mb-4"></div>
+            <p className="text-gray-600 font-medium">Loading your registrations...</p>
+          </div>
+        )}
+
+        {/* Registrations List */}
+        {!loading && filteredTournaments && filteredTournaments.length > 0 ? (
+          <div className="grid grid-cols-1 gap-6">
+            {filteredTournaments.map((registration) => (
+              <div
+                key={registration.id}
+                className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden hover:shadow-xl transition-all duration-200 group"
+              >
+                <div className="p-6">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
+                    <div className="flex-1">
+                      <div className="flex items-start gap-3 mb-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <Trophy className="w-6 h-6 text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="text-xl font-bold text-gray-900 mb-1 group-hover:text-primary-500 transition-colors">
+                            {registration.tournament_name}
+                          </h3>
+                          <p className="text-sm text-gray-600">{registration.sport_name}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {getTournamentStatusBadge(registration.tournament_status)}
+                        {getStatusBadge(registration.participant_status)}
+                        {registration.entry_fee > 0 && getPaymentBadge(registration.payment_status)}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <Calendar className="w-4 h-4 text-primary-500" />
+                          <span>{formatDate(registration.start_date)}</span>
+                        </div>
+
+                        {registration.venue_name && (
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <MapPin className="w-4 h-4 text-primary-500" />
+                            <span className="truncate">{registration.venue_name}</span>
+                          </div>
+                        )}
+
+                        {registration.entry_fee > 0 && (
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <DollarSign className="w-4 h-4 text-primary-500" />
+                            <span className="font-semibold">₹{registration.entry_fee}</span>
+                          </div>
+                        )}
+
+                        {registration.seed_number && (
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <Trophy className="w-4 h-4 text-primary-500" />
+                            <span>Seed #{registration.seed_number}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <button
+                        onClick={() => navigate(`/tournaments/${registration.tournament_id}`)}
+                        className="flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+                      >
+                        View Details
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+
+                      {registration.payment_status === 'pending' && (
+                        <button
+                          onClick={() => navigate(`/tournaments/${registration.tournament_id}/payment`)}
+                          className="flex items-center justify-center gap-2 px-4 py-2 border-2 border-primary-500 text-primary-500 font-semibold rounded-lg hover:bg-primary-50 transition-all duration-200"
+                        >
+                          <DollarSign className="w-4 h-4" />
+                          Complete Payment
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {registration.registration_date && (
+                    <div className="pt-4 border-t border-gray-200">
+                      <p className="text-xs text-gray-500">
+                        Registered on {formatDateTime(registration.registration_date)}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          !loading && (
+            <div className="text-center py-16 bg-white rounded-2xl shadow-lg border border-gray-100">
+              <div className="w-20 h-20 bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Trophy className="w-10 h-10 text-gray-400" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">No Registrations Found</h3>
+              <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                {searchTerm || filter !== 'all'
+                  ? 'Try adjusting your filters'
+                  : "You haven't registered for any tournaments yet"}
+              </p>
+              <button
+                onClick={() => navigate('/tournaments')}
+                className="px-6 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 inline-flex items-center gap-2"
+              >
+                <Trophy className="w-5 h-5" />
+                Browse Tournaments
+              </button>
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default MyRegistrations;

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SportLife - Multi-Sport Tournament Management</title>
+    
+    <!-- Google Fonts - Brand Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Open+Sans:wght@300;400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    
+    <!-- Facebook SDK -->
+    <script>
+      window.fbAsyncInit = function() {
+        FB.init({
+          appId      : '123456789012345', // Replace with your Facebook App ID from .env
+          cookie     : true,
+          xfbml      : true,
+          version    : 'v18.0'
+        });
+        FB.AppEvents.logPageView();   
+      };
+
+      (function(d, s, id){
+         var js, fjs = d.getElementsByTagName(s)[0];
+         if (d.getElementById(id)) {return;}
+         js = d.createElement(s); js.id = id;
+         js.src = "https://connect.facebook.net/en_US/sdk.js";
+         fjs.parentNode.insertBefore(js, fjs);
+       }(document, 'script', 'facebook-jssdk'));
+    </script>
+    
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

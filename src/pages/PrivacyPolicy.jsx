@@ -1,0 +1,313 @@
+import { Shield, Lock, Users, Database, FileText, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import LogoAuth from '../components/LogoAuth';
+
+const PrivacyPolicy = () => {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-primary-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <Link to="/" className="flex items-center space-x-3">
+              <LogoAuth size="sm" showText={false} />
+              <span className="text-2xl font-bold bg-gradient-to-r from-primary-500 to-primary-600 bg-clip-text text-transparent">
+                Thesportlife
+              </span>
+            </Link>
+            <Link
+              to="/login"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-primary-500 to-primary-600 rounded-lg hover:from-primary-600 hover:to-teal-700 transition-all duration-200 shadow-md hover:shadow-lg"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to App
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      {/* Hero Section */}
+      <div className="bg-gradient-to-br from-primary-500 via-primary-600 to-teal-700 text-white py-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center">
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-white/10 backdrop-blur-sm rounded-full mb-6">
+              <Shield className="h-10 w-10" />
+            </div>
+            <h1 className="text-4xl md:text-5xl font-bold mb-4">Privacy Policy</h1>
+            <p className="text-xl text-primary-100 max-w-3xl mx-auto">
+              Your privacy matters to us. Learn how we collect, use, and protect your personal information.
+            </p>
+            <p className="text-sm text-primary-200 mt-4">Last Updated: November 2024</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {/* Introduction */}
+        <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-gray-100">
+          <div className="flex items-start space-x-4">
+            <div className="flex-shrink-0">
+              <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center">
+                <FileText className="h-6 w-6 text-primary-500" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Our Commitment to Your Privacy</h2>
+              <p className="text-gray-700 leading-relaxed">
+                Thesportlife values its customers and all technically feasible steps are taken to protect their privacy. 
+                We do not sell or rent personal information to third parties. To demonstrate our commitment to your privacy, 
+                we have prepared this statement disclosing the privacy practices for the Thesportlife application.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* What Information is Collected */}
+        <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-gray-100">
+          <div className="flex items-start space-x-4 mb-6">
+            <div className="flex-shrink-0">
+              <div className="w-12 h-12 bg-teal-100 rounded-lg flex items-center justify-center">
+                <Database className="h-6 w-6 text-primary-600" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-gray-900">What Information is Collected</h2>
+            </div>
+          </div>
+          <p className="text-gray-700 mb-6 leading-relaxed">
+            In general, when you use the Thesportlife app, we collect certain information to provide our services. 
+            We do not sell, share, or rent this information to others in ways different from what is disclosed in this statement.
+          </p>
+
+          {/* Personal Information */}
+          <div className="mb-8">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+              <Users className="h-5 w-5 text-primary-500 mr-2" />
+              Personal Information
+            </h3>
+            <p className="text-gray-700 mb-4">
+              We collect the following personal information that you voluntarily provide to us when you register on the App:
+            </p>
+            <div className="grid md:grid-cols-2 gap-3">
+              {[
+                'Name (First Name and Last Name)',
+                'Email Address',
+                'Phone Number',
+                'Profile Picture (optional)',
+                'Date of Birth',
+                'Gender',
+                'Skill level (Sports specific)'
+              ].map((item, index) => (
+                <div key={index} className="flex items-start space-x-3 bg-gray-50 p-3 rounded-lg">
+                  <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" />
+                  <span className="text-gray-700">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Authentication Information */}
+          <div className="mb-8">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+              <Lock className="h-5 w-5 text-primary-500 mr-2" />
+              Authentication Information
+            </h3>
+            <p className="text-gray-700 mb-4">When you use third-party authentication services:</p>
+            <div className="space-y-3">
+              <div className="bg-primary-50 border-l-4 border-primary-500 p-4 rounded-r-lg">
+                <p className="font-medium text-gray-900">Google Sign-In</p>
+                <p className="text-gray-700 text-sm mt-1">
+                  We receive your Google account email, name, and profile picture
+                </p>
+              </div>
+              <div className="bg-primary-50 border-l-4 border-primary-500 p-4 rounded-r-lg">
+                <p className="font-medium text-gray-900">Phone OTP Verification</p>
+                <p className="text-gray-700 text-sm mt-1">
+                  We verify your phone number for account security
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Sports and Tournament Data */}
+          <div className="mb-8">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">Sports and Tournament Data</h3>
+            <div className="bg-gradient-to-br from-primary-50 to-primary-50 p-6 rounded-xl">
+              <ul className="space-y-2">
+                {[
+                  'Tournament registrations and participation history',
+                  'Match scores and statistics',
+                  'Team memberships and roles',
+                  'Referee assignments and match officiating records',
+                  'Tournament creation and management data'
+                ].map((item, index) => (
+                  <li key={index} className="flex items-start space-x-3">
+                    <div className="w-2 h-2 bg-primary-500 rounded-full mt-2 flex-shrink-0"></div>
+                    <span className="text-gray-700">{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {/* Images and Media */}
+          <div className="mb-8">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">Images and Media</h3>
+            <p className="text-gray-700 mb-4">With your permission, we collect:</p>
+            <div className="space-y-3">
+              {[
+                { title: 'Profile Pictures', desc: 'Photos you upload for your profile' },
+                { title: 'Tournament Images', desc: 'Photos you upload when creating or managing tournaments' },
+                { title: 'Camera Access', desc: 'Used to capture photos directly from the app' }
+              ].map((item, index) => (
+                <div key={index} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                  <p className="font-medium text-gray-900">{item.title}</p>
+                  <p className="text-gray-600 text-sm mt-1">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Device and Usage Information */}
+          <div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">Device and Usage Information</h3>
+            <p className="text-gray-700 mb-4">We automatically collect certain information when you use the App:</p>
+            <div className="grid md:grid-cols-2 gap-3">
+              {[
+                'Device type and model',
+                'Operating system version',
+                'Unique device identifiers',
+                'IP address',
+                'App usage statistics',
+                'Crash reports and error logs'
+              ].map((item, index) => (
+                <div key={index} className="flex items-center space-x-3 bg-gray-50 p-3 rounded-lg">
+                  <div className="w-2 h-2 bg-primary-600 rounded-full"></div>
+                  <span className="text-gray-700">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* How We Protect Your Information */}
+        <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-gray-100">
+          <div className="flex items-start space-x-4 mb-6">
+            <div className="flex-shrink-0">
+              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <Lock className="h-6 w-6 text-green-600" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-gray-900">How We Protect Your Information</h2>
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-primary-50 to-primary-50 p-6 rounded-xl border border-primary-200">
+            <p className="text-gray-700 leading-relaxed mb-4">
+              The Thesportlife app uses a <span className="font-semibold text-primary-600">secure server (SSL)</span> to 
+              encrypt your personal information. We employ strong security measures to prevent the loss, misuse, and 
+              alteration of your information once it is in our records.
+            </p>
+            <p className="text-gray-700 leading-relaxed">
+              The privacy and protection of your personal information are vitally important to us. Thesportlife does not 
+              make personal information available to any third parties without your permission.
+            </p>
+          </div>
+        </div>
+
+        {/* How We Share Your Information */}
+        <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-gray-100">
+          <div className="flex items-start space-x-4 mb-6">
+            <div className="flex-shrink-0">
+              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                <Users className="h-6 w-6 text-purple-600" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-gray-900">How We Share Your Information</h2>
+            </div>
+          </div>
+
+          {/* We Do NOT */}
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+              We Do NOT:
+            </h3>
+            <div className="space-y-3">
+              {[
+                'Sell your personal information to third parties',
+                'Share your information for marketing purposes',
+                'Provide your data to advertisers'
+              ].map((item, index) => (
+                <div key={index} className="flex items-start space-x-3 bg-red-50 p-4 rounded-lg border border-red-200">
+                  <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <span className="text-red-600 font-bold text-lg">✕</span>
+                  </div>
+                  <span className="text-gray-700">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-primary-50 border-l-4 border-primary-500 p-4 rounded-r-lg">
+            <p className="text-gray-700 leading-relaxed">
+              We may disclose your information if required to do so by law or in response to valid requests by public 
+              authorities (e.g., a court or government agency).
+            </p>
+          </div>
+        </div>
+
+        {/* Amendments */}
+        <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-gray-100">
+          <div className="flex items-start space-x-4 mb-6">
+            <div className="flex-shrink-0">
+              <div className="w-12 h-12 bg-teal-100 rounded-lg flex items-center justify-center">
+                <FileText className="h-6 w-6 text-primary-600" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-gray-900">Amendments to Our Privacy Policy</h2>
+            </div>
+          </div>
+          <p className="text-gray-700 leading-relaxed">
+            We may, from time to time, amend our Privacy Policy. If we do, we will post such amendments to this document 
+            so that you may always have access to our most recent policy.
+          </p>
+        </div>
+
+        {/* Contact Section */}
+        <div className="bg-gradient-to-br from-primary-500 via-primary-600 to-teal-700 rounded-2xl shadow-lg p-8 text-white text-center">
+          <h2 className="text-2xl font-bold mb-4">Questions About Our Privacy Policy?</h2>
+          <p className="text-primary-100 mb-6 max-w-2xl mx-auto">
+            If you have any questions or concerns about our privacy practices, please don't hesitate to contact us.
+          </p>
+          <Link
+            to="/login"
+            className="inline-flex items-center px-6 py-3 bg-white text-primary-500 font-medium rounded-lg hover:bg-primary-50 transition-all duration-200 shadow-lg hover:shadow-xl"
+          >
+            Return to App
+          </Link>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <footer className="bg-gray-900 text-white py-8 mt-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center">
+            <div className="flex items-center justify-center space-x-3 mb-4">
+              <Shield className="h-6 w-6 text-primary-400" />
+              <span className="text-xl font-bold">Thesportlife</span>
+            </div>
+            <p className="text-gray-400 text-sm">
+              © {new Date().getFullYear()} Thesportlife. All rights reserved.
+            </p>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default PrivacyPolicy;

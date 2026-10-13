@@ -1,0 +1,208 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { fetchTournament, clearError } from '../store/slices/tournamentSlice';
+import Navbar from '../components/Navbar';
+import TournamentManagementPanel from '../components/TournamentManagementPanel';
+import TournamentParticipantsView from '../components/TournamentParticipantsView';
+import { fetchTournamentParticipants } from '../store/slices/tournamentSlice';
+import { formatDate } from '../utils/dateFormatter';
+import {
+  ArrowLeft,
+  Trophy,
+  Calendar,
+  MapPin,
+  DollarSign,
+  Users,
+  Loader,
+  AlertCircle,
+  Settings
+} from 'lucide-react';
+
+const TournamentManagement = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { currentTournament, participants, loading, error } = useSelector((state) => state.tournament);
+  const { user } = useSelector((state) => state.auth);
+
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (id) {
+      dispatch(fetchTournament(id));
+      dispatch(fetchTournamentParticipants(id));
+    }
+  }, [id, dispatch, refreshKey]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+    };
+  }, [dispatch]);
+
+  const handleActionComplete = () => {
+    // Refresh tournament data after action
+    setRefreshKey(prev => prev + 1);
+  };
+
+  // Check if user is organizer
+  const isOrganizer = currentTournament?.organizer_id === user?.id;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+        <Navbar />
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center">
+            <Loader className="w-16 h-16 text-primary-500 animate-spin mx-auto mb-4" />
+            <p className="text-gray-600 font-medium">Loading tournament...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !currentTournament) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+        <Navbar />
+        <div className="max-w-4xl mx-auto px-4 py-16">
+          <div className="bg-white rounded-2xl shadow-lg p-12 text-center">
+            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Tournament Not Found</h2>
+            <p className="text-gray-600 mb-6">{error || 'The tournament you are looking for does not exist.'}</p>
+            <button
+              onClick={() => navigate('/tournaments/my-tournaments')}
+              className="px-6 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all"
+            >
+              Back to My Tournaments
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isOrganizer) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+        <Navbar />
+        <div className="max-w-4xl mx-auto px-4 py-16">
+          <div className="bg-white rounded-2xl shadow-lg p-12 text-center">
+            <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
+            <p className="text-gray-600 mb-6">Only the tournament organizer can manage this tournament.</p>
+            <button
+              onClick={() => navigate(`/tournaments/${id}`)}
+              className="px-6 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all"
+            >
+              View Tournament Details
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+      <Navbar />
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Header */}
+        <div className="mb-8">
+          <button
+            onClick={() => navigate('/tournaments/my-tournaments')}
+            className="flex items-center gap-2 text-gray-600 hover:text-primary-500 transition-colors mb-4"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            <span className="font-semibold">Back to My Tournaments</span>
+          </button>
+
+          <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+            <div className="flex items-start justify-between">
+              <div className="flex items-start gap-4 flex-1">
+                <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Trophy className="w-8 h-8 text-white" />
+                </div>
+                <div className="flex-1">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">{currentTournament.name}</h1>
+                  <p className="text-gray-600 mb-4">{currentTournament.description}</p>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Trophy className="w-4 h-4 text-primary-500" />
+                      <span className="font-semibold">{currentTournament.sport_name}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Calendar className="w-4 h-4 text-primary-500" />
+                      <span>{formatDate(currentTournament.start_date)}</span>
+                    </div>
+                    {currentTournament.venue_name && (
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <MapPin className="w-4 h-4 text-primary-500" />
+                        <span>{currentTournament.venue_name}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <DollarSign className="w-4 h-4 text-primary-500" />
+                      <span>Entry: ₹{currentTournament.entry_fee || 0}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <button
+                onClick={() => navigate(`/tournaments/${id}`)}
+                className="px-4 py-2 border-2 border-primary-500 text-primary-500 font-semibold rounded-lg hover:bg-primary-50 transition-all"
+              >
+                View Public Page
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Management Content */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Column - Management Actions */}
+          <div className="lg:col-span-1">
+            <TournamentManagementPanel
+              tournament={currentTournament}
+              participants={participants || []}
+              onUpdate={handleActionComplete}
+              userId={user?.id}
+            />
+          </div>
+
+          {/* Right Column - Participants */}
+          <div className="lg:col-span-2">
+            <TournamentParticipantsView
+              tournamentId={currentTournament.id}
+              category={currentTournament.category}
+            />
+          </div>
+        </div>
+
+        {/* Additional Info */}
+        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <Settings className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-blue-800">
+              <p className="font-semibold mb-1">Tournament Management Tips:</p>
+              <ul className="list-disc list-inside space-y-1 text-blue-700">
+                <li>Publish your tournament to make it visible and open registration</li>
+                <li>Monitor participant registrations and payments</li>
+                <li>Close registration when you're ready to start matches</li>
+                <li>Generate brackets after registration closes</li>
+                <li>Mark tournament as completed when all matches are finished</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default TournamentManagement;

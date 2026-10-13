@@ -1,0 +1,1353 @@
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import toast from 'react-hot-toast';
+import {
+  fetchTournament,
+  registerForTournament,
+  withdrawFromTournament,
+  fetchTournamentParticipants,
+  clearError,
+  clearSuccess
+} from '../store/slices/tournamentSlice';
+import { formatDate, parseMySQLDate } from '../utils/dateFormatter';
+import {
+  ArrowLeft,
+  Trophy,
+  Calendar,
+  MapPin,
+  Users,
+  DollarSign,
+  Clock,
+  User,
+  CheckCircle,
+  AlertCircle,
+  Award,
+  Activity,
+  Info,
+  UserPlus,
+  UserMinus,
+  XCircle
+} from 'lucide-react';
+import { getJoinOptions, getMatches, updateMatchScore } from '../services/tournamentService';
+import TeamSelectionModal from '../components/TeamSelectionModal';
+import PartnershipSelectionModal from '../components/PartnershipSelectionModal';
+import ParticipantDetailsModal from '../components/ParticipantDetailsModal';
+import PlayerProfileModal from '../components/PlayerProfileModal';
+import TournamentManagementPanel from '../components/TournamentManagementPanel';
+import TournamentBracket from '../components/TournamentBracket';
+import MatchDetailsModal from '../components/MatchDetailsModal';
+import MatchScheduleTab from '../components/MatchScheduleTab';
+import TournamentParticipants from '../components/TournamentParticipants';
+import PointsTable from '../components/PointsTable';
+import Navbar from '../components/Navbar';
+import { getImageUrl, getUserInitials } from '../utils/imageUtils';
+
+const TournamentDetail = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const [searchParams] = useSearchParams();
+  const { currentTournament: tournament, participants, loading, error, success } = useSelector((state) => state.tournament);
+  const { user, isAuthenticated } = useSelector((state) => state.auth);
+
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showTeamSelection, setShowTeamSelection] = useState(false);
+  const [showPartnershipSelection, setShowPartnershipSelection] = useState(false);
+  const [showParticipantDetails, setShowParticipantDetails] = useState(false);
+  const [selectedParticipant, setSelectedParticipant] = useState(null);
+  const [showMatchDetails, setShowMatchDetails] = useState(false);
+  const [selectedMatch, setSelectedMatch] = useState(null);
+  const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+  const [showPlayerModal, setShowPlayerModal] = useState(false);
+  const [withdrawReason, setWithdrawReason] = useState('');
+  const [registrationData, setRegistrationData] = useState(null);
+  const [joinOptions, setJoinOptions] = useState(null);
+  const [loadingOptions, setLoadingOptions] = useState(false);
+  const [matches, setMatches] = useState([]);
+  const [loadingMatches, setLoadingMatches] = useState(false);
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'overview');
+  const tabsRef = useRef(null);
+
+  useEffect(() => {
+    dispatch(fetchTournament(id));
+    dispatch(fetchTournamentParticipants(id));
+    fetchMatchesData();
+    if (isAuthenticated) {
+      fetchJoinOptions();
+    }
+  }, [dispatch, id, isAuthenticated]);
+
+  // Debug log to see tournament data
+  useEffect(() => {
+    if (tournament) {
+      // console.log('🏆 Tournament data received:', {
+      //   id: tournament.id,
+      //   name: tournament.name,
+      //   status: tournament.status,
+      //   winner_participant_id: tournament.winner_participant_id,
+      //   winner_name: tournament.winner_name,
+      //   start_date: tournament.start_date,
+      //   end_date: tournament.end_date,
+      //   registration_start: tournament.registration_start,
+      //   registration_end: tournament.registration_end
+      // });
+    }
+  }, [tournament]);
+
+  const fetchJoinOptions = async () => {
+    try {
+      setLoadingOptions(true);
+      const options = await getJoinOptions(id);
+      setJoinOptions(options);
+    } catch (err) {
+      console.error('Failed to fetch join options:', err);
+    } finally {
+      setLoadingOptions(false);
+    }
+  };
+
+
+
+  const fetchMatchesData = async () => {
+    try {
+      setLoadingMatches(true);
+      const matchesData = await getMatches(id);
+      // console.log('TournamentDetail - fetchMatchesData RAW response:', matchesData);
+      // console.log('TournamentDetail - is Array?:', Array.isArray(matchesData));
+      // console.log('TournamentDetail - matches count:', matchesData?.length);
+      
+      // Ensure we always set an array
+      const matchesArray = Array.isArray(matchesData) ? matchesData : [];
+      // console.log('TournamentDetail - setting matches array:', matchesArray);
+      setMatches(matchesArray);
+    } catch (err) {
+      console.error('Failed to fetch matches:', err);
+      setMatches([]); // Set empty array on error
+    } finally {
+      setLoadingMatches(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+      dispatch(clearSuccess());
+    };
+  }, [dispatch]);
+
+  const handleRegisterClick = () => {
+    if (!tournament) return;
+
+    // Check tournament category and show appropriate modal
+    if (tournament.category === 'teams') {
+      // For teams: User sends request, organizer accepts, then organizer creates teams
+      setShowRegisterModal(true);
+    } else if (tournament.category === 'doubles') {
+      setShowPartnershipSelection(true);
+    } else {
+      // Singles - show direct registration modal
+      setShowRegisterModal(true);
+    }
+  };
+
+  const handleRegister = async (data = {}) => {
+    const result = await dispatch(registerForTournament({ id, data }));
+    
+    if (registerForTournament.fulfilled.match(result)) {
+      // Show appropriate success message based on tournament type
+      const successMessage = tournament.tournament_type === 'open' 
+        ? 'Request sent! Waiting for organizer approval.' 
+        : 'Registration successful!';
+      toast.success(successMessage);
+      
+      setShowRegisterModal(false);
+      setShowTeamSelection(false);
+      setShowPartnershipSelection(false);
+      setRegistrationData(result.payload);
+      
+      // If tournament has entry fee, show payment modal
+      if (tournament.entry_fee > 0) {
+        setShowPaymentModal(true);
+      } else {
+        // Refresh data for free tournaments
+        dispatch(fetchTournament(id));
+        dispatch(fetchTournamentParticipants(id));
+        fetchJoinOptions();
+      }
+    } else if (registerForTournament.rejected.match(result)) {
+      const errorMessage = result.payload || result.error?.message || 'Failed to register for tournament';
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleTeamSelect = (team) => {
+    handleRegister({ team_id: team.id });
+  };
+
+  const handlePartnershipSelect = (partnership) => {
+    handleRegister({ partnership_id: partnership.id });
+  };
+
+  const handleCreateTeam = () => {
+    // Navigate to create team page with tournament context
+    navigate(`/teams/create?tournament_id=${id}`);
+  };
+
+  const handleMatchClick = (match) => {
+    // Only navigate to history page if match is completed
+    // Otherwise, show match details modal (existing functionality)
+    if (match.status === 'completed') {
+      navigate(`/matches/${match.id}/history`);
+    } else {
+      setSelectedMatch(match);
+      setShowMatchDetails(true);
+    }
+  };
+
+  const handleMatchUpdate = async (data) => {
+    try {
+      await updateMatchScore(data.matchId, data);
+      toast.success('Match updated successfully!');
+      // Refresh matches
+      fetchMatchesData();
+      setShowMatchDetails(false);
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to update match');
+    }
+  };
+
+  const handleBulkSchedule = async (scheduleData) => {
+    try {
+      // Update multiple matches
+      for (const item of scheduleData) {
+        await updateMatchScore(item.match_id, item);
+      }
+      // Refresh matches
+      fetchMatchesData();
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to schedule matches');
+    }
+  };
+
+  const handlePayment = () => {
+    // TODO: Integrate with payment gateway
+    // For now, just close modal and refresh
+    setShowPaymentModal(false);
+    dispatch(fetchTournament(id));
+    dispatch(fetchTournamentParticipants(id));
+  };
+
+  const handleWithdraw = async () => {
+    const result = await dispatch(withdrawFromTournament({ id, reason: withdrawReason }));
+    
+    if (withdrawFromTournament.fulfilled.match(result)) {
+      toast.success('Successfully withdrawn from tournament');
+      setShowWithdrawModal(false);
+      setWithdrawReason('');
+      dispatch(fetchTournament(id));
+      dispatch(fetchTournamentParticipants(id));
+      fetchJoinOptions();
+    } else if (withdrawFromTournament.rejected.match(result)) {
+      const errorMessage = result.payload || result.error?.message || 'Failed to withdraw from tournament';
+      toast.error(errorMessage);
+    }
+  };
+
+  const getUserRegistrationStatus = () => {
+    // console.log("new=-=",user , participants , Array.isArray(participants));
+    
+    if (!user || !participants || !Array.isArray(participants)) return null;
+    const registration = participants.find(p => p.user_id === user.id);
+    return registration ? registration.status : null;
+  };
+
+  const isRegistered = () => {
+    const status = getUserRegistrationStatus();
+    // console.log('TournamentDetail - isRegistered - status:', status);
+    return status === 'locked' || status === 'accepted';
+  };
+
+  const isOrganizer = () => {
+    if (!user || !tournament) return false;
+    return tournament.organizer_id === user.id;
+  };
+
+  const canRegister = () => {
+    if (!isAuthenticated || !tournament) return false;
+    if (isRegistered() || isOrganizer()) return false;
+    if (tournament.status !== 'open') return false;
+    if (tournament.max_participants && tournament.participant_count >= tournament.max_participants) return false;
+    
+    // Check registration dates
+    if (tournament.registration_end) {
+      const now = new Date();
+      const regEnd = parseMySQLDate(tournament.registration_end);
+      const regStart = tournament.registration_start ? parseMySQLDate(tournament.registration_start) : null;
+      
+      // Registration has ended
+      if (now > regEnd) return false;
+      
+      // Registration hasn't started yet
+      if (regStart && now < regStart) return false;
+    }
+    
+    return true;
+  };
+
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      draft: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Draft', icon: Clock },
+      open: { bg: 'bg-primary-100', text: 'text-primary-600', label: 'Open for Registration', icon: UserPlus },
+      closed: { bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'Registration Closed', icon: Clock },
+      ongoing: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Ongoing', icon: Activity },
+      completed: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Completed', icon: Award },
+      cancelled: { bg: 'bg-red-100', text: 'text-red-700', label: 'Cancelled', icon: AlertCircle },
+      rejected: { bg: 'bg-red-100', text: 'text-red-700', label: 'Rejected', icon: XCircle }
+    };
+
+    const config = statusConfig[status] || statusConfig.draft;
+    const Icon = config.icon;
+
+    return (
+      <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold ${config.bg} ${config.text}`}>
+        <Icon className="w-4 h-4" />
+        {config.label}
+      </span>
+    );
+  };
+
+  if (loading && !tournament) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary-200 border-t-primary-500 mx-auto mb-4"></div>
+          <p className="text-gray-600 font-medium">Loading tournament...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!tournament) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+        <div className="text-center">
+          <Trophy className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Tournament Not Found</h2>
+          <button
+            onClick={() => navigate('/tournaments')}
+            className="text-primary-500 hover:text-primary-600 font-semibold"
+          >
+            Back to Tournaments
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-primary-50 to-cyan-50">
+      {/* Navbar */}
+      <Navbar />
+      
+      {/* Page Header */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/tournaments')}
+              className="p-2 hover:bg-primary-50 rounded-xl transition-all duration-200 hover:scale-105 group"
+            >
+              <ArrowLeft className="w-5 h-5 text-gray-600 group-hover:text-primary-500 transition-colors" />
+            </button>
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-primary-500 to-primary-600 bg-clip-text text-transparent">
+                {tournament.name}
+              </h1>
+              <p className="text-sm text-gray-600">{tournament.sport_name}</p>
+            </div>
+            {getStatusBadge(tournament.status)}
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Success/Error Messages */}
+        {success && (
+          <div className="bg-primary-50 border-l-4 border-primary-500 text-primary-600 px-4 py-3 rounded-lg mb-6 flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+            <span className="text-sm">{success}</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+            <span className="text-sm">{error}</span>
+          </div>
+        )}
+
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Main Content */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Tournament Info Card */}
+            <div className="bg-white rounded-2xl shadow-lg p-8 border border-gray-100">
+              <div className="flex items-center gap-3 mb-6">
+                {/* Tournament Logo or Trophy Icon */}
+                <div className="relative w-12 h-12 flex-shrink-0">
+                  {tournament.logo ? (
+                    <img
+                      src={getImageUrl(tournament.logo)}
+                      alt={tournament.name}
+                      className="w-12 h-12 rounded-xl object-cover border-2 border-primary-200 shadow-md"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    className="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl flex items-center justify-center"
+                    style={{ display: tournament.logo ? 'none' : 'flex' }}
+                  >
+                    <Trophy className="w-6 h-6 text-white" />
+                  </div>
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Tournament Details</h2>
+                  <p className="text-sm text-gray-500">Complete information</p>
+                </div>
+              </div>
+
+              {tournament.description && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Description</h3>
+                  <p className="text-gray-600">{tournament.description}</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <Calendar className="w-5 h-5 text-primary-500 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500 font-medium">Start Date</p>
+                    <p className="text-sm font-semibold text-gray-900">
+                      {formatDate(tournament.start_date)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <Calendar className="w-5 h-5 text-primary-500 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500 font-medium">End Date</p>
+                    <p className="text-sm font-semibold text-gray-900">
+                      {formatDate(tournament.end_date)}
+                    </p>
+                  </div>
+                </div>
+
+                {tournament.venue_name && (
+                  <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                    <MapPin className="w-5 h-5 text-primary-500 mt-0.5" />
+                    <div>
+                      <p className="text-xs text-gray-500 font-medium">Venue</p>
+                      <p className="text-sm font-semibold text-gray-900">{tournament.venue_name}</p>
+                      {tournament.venue_city && (
+                        <p className="text-xs text-gray-500">{tournament.venue_city}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <Info className="w-5 h-5 text-primary-500 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500 font-medium">Format</p>
+                    <p className="text-sm font-semibold text-gray-900 capitalize">
+                      {tournament.format_type?.replace('_', ' ')}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <Users className="w-5 h-5 text-primary-500 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500 font-medium">Category</p>
+                    <p className="text-sm font-semibold text-gray-900 capitalize">{tournament.category}</p>
+                  </div>
+                </div>
+
+                {tournament.entry_fee > 0 && (
+                  <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                    <DollarSign className="w-5 h-5 text-primary-500 mt-0.5" />
+                    <div>
+                      <p className="text-xs text-gray-500 font-medium">Entry Fee</p>
+                      <p className="text-sm font-semibold text-gray-900">₹{tournament.entry_fee}</p>
+                    </div>
+                  </div>
+                )}
+
+                {tournament.prize_money > 0 && (
+                  <div className="flex items-start gap-3 p-3 bg-primary-50 rounded-lg border border-primary-200">
+                    <Award className="w-5 h-5 text-primary-500 mt-0.5" />
+                    <div>
+                      <p className="text-xs text-primary-600 font-medium">Prize Money</p>
+                      <p className="text-sm font-bold text-primary-700">₹{tournament.prize_money}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Organizer Info */}
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">Organized By</h3>
+                <div className="flex items-center gap-3">
+                  {/* Organizer Profile Picture */}
+                  <div className="relative w-10 h-10 flex-shrink-0">
+                    {tournament.organizer_profile_image ? (
+                      <img
+                        src={getImageUrl(tournament.organizer_profile_image)}
+                        alt={`${tournament.organizer_first_name} ${tournament.organizer_last_name}`}
+                        className="w-10 h-10 rounded-full object-cover border-2 border-primary-200"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                    ) : null}
+                    <div
+                      className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center text-white font-bold"
+                      style={{ display: tournament.organizer_profile_image ? 'none' : 'flex' }}
+                    >
+                      {getUserInitials(tournament.organizer_first_name, tournament.organizer_last_name)}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      {tournament.organizer_first_name} {tournament.organizer_last_name}
+                    </p>
+                    <p className="text-sm text-gray-500">{tournament.organizer_email}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Tournament Management Panel (Organizer Only) */}
+            {isOrganizer() && (
+              <TournamentManagementPanel
+                tournament={tournament}
+                participants={participants}
+                userId={user?.id}
+                onUpdate={() => {
+                  dispatch(fetchTournament(id));
+                  dispatch(fetchTournamentParticipants(id));
+                  fetchMatchesData();
+                }}
+                onViewMatches={() => {
+                  setActiveTab('matches');
+                  // Scroll to tabs section
+                  setTimeout(() => {
+                    tabsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }, 100);
+                }}
+              />
+            )}
+
+            {/* Tabs Navigation */}
+            {(tournament.status === 'ongoing' || tournament.status === 'completed' || tournament.status === 'closed') && (
+              <div ref={tabsRef} className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+                <div className="border-b border-gray-200">
+                  <div className="flex">
+                    <button
+                      onClick={() => setActiveTab('overview')}
+                      className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors relative ${
+                        activeTab === 'overview'
+                          ? 'text-primary-500 bg-primary-50'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                    >
+                      Overview
+                      {activeTab === 'overview' && (
+                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500"></div>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('matches')}
+                      className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors relative ${
+                        activeTab === 'matches'
+                          ? 'text-primary-500 bg-primary-50'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                    >
+                      Match Schedule
+                      {activeTab === 'matches' && (
+                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500"></div>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('bracket')}
+                      className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors relative ${
+                        activeTab === 'bracket'
+                          ? 'text-primary-500 bg-primary-50'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                    >
+                      Bracket
+                      {activeTab === 'bracket' && (
+                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500"></div>
+                      )}
+                    </button>
+                    {tournament.category === 'teams' && (
+                      <button
+                        onClick={() => setActiveTab('standings')}
+                        className={`flex-1 px-6 py-4 text-sm font-semibold transition-colors relative ${
+                          activeTab === 'standings'
+                            ? 'text-primary-500 bg-primary-50'
+                            : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                        }`}
+                      >
+                        Standings
+                        {activeTab === 'standings' && (
+                          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500"></div>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-6">
+                  {activeTab === 'overview' && (
+                    <div className="space-y-6">
+                      {/* Participants List */}
+                      <div>
+                        <h3 className="text-lg font-bold text-gray-900 mb-4">Participants</h3>
+                        {Array.isArray(participants) && participants.length > 0 ? (
+                          <div className="grid grid-cols-1 gap-3">
+                            {participants.map((participant) => {
+                              const getStatusBadge = () => {
+                                if (participant.status === 'confirmed' && participant.payment_status === 'paid') {
+                                  return (
+                                    <div className="flex items-center gap-1">
+                                      <CheckCircle className="w-4 h-4 text-primary-500" />
+                                      <span className="text-xs text-primary-500 font-medium">Confirmed</span>
+                                    </div>
+                                  );
+                                }
+                                if (participant.payment_status === 'pending') {
+                                  return (
+                                    <div className="flex items-center gap-1">
+                                      <Clock className="w-4 h-4 text-yellow-600" />
+                                      <span className="text-xs text-yellow-600 font-medium">Pending Payment</span>
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div className="flex items-center gap-1">
+                                    <User className="w-4 h-4 text-gray-400" />
+                                    <span className="text-xs text-gray-500 font-medium capitalize">{participant.status}</span>
+                                  </div>
+                                );
+                              };
+
+                              // Check if participant is the tournament winner
+                              const isWinner = tournament.winner_participant_id && 
+                                (participant.id === tournament.winner_participant_id || 
+                                 participant.team_id === tournament.winner_participant_id ||
+                                 participant.pair_id === tournament.winner_participant_id ||
+                                 participant.registration_id === tournament.winner_participant_id);
+
+                              // Get the correct participant ID based on category
+                              const participantId = participant.id || 
+                                                   participant.registration_id || 
+                                                   participant.team_id || 
+                                                   participant.pair_id;
+
+                              return (
+                                <div 
+                                  key={participantId} 
+                                  onClick={() => {
+                                    // If tournament is completed, navigate to performance page
+                                    if (tournament.status === 'completed') {
+                                      navigate(`/tournaments/${id}/participant/${participantId}`);
+                                    } else if (tournament.category === 'singles' && participant.user_id) {
+                                      // For singles, open player profile directly
+                                      setSelectedPlayerId(participant.user_id);
+                                      setShowPlayerModal(true);
+                                    } else {
+                                      // For teams/doubles, show participant details modal
+                                      setSelectedParticipant(participant);
+                                      setShowParticipantDetails(true);
+                                    }
+                                  }}
+                                  className={`flex items-center gap-3 p-4 rounded-xl hover:shadow-md transition-all border cursor-pointer ${
+                                    isWinner 
+                                      ? 'bg-yellow-50 border-2 border-yellow-400 hover:bg-yellow-100' 
+                                      : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                                  }`}
+                                >
+                                  {/* Profile Picture */}
+                                  <div className="relative w-12 h-12 flex-shrink-0">
+                                    {participant.participant_image ? (
+                                      <img
+                                        src={getImageUrl(participant.participant_image)}
+                                        alt={participant.participant_name}
+                                        className="w-12 h-12 rounded-xl object-cover border-2 border-primary-200"
+                                        onError={(e) => {
+                                          e.target.style.display = 'none';
+                                          e.target.nextSibling.style.display = 'flex';
+                                        }}
+                                      />
+                                    ) : null}
+                                    <div
+                                      className={`w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold ${
+                                        isWinner ? 'bg-gradient-to-br from-yellow-400 to-amber-500' : 'bg-gradient-to-br from-primary-500 to-primary-600'
+                                      }`}
+                                      style={{ display: participant.participant_image ? 'none' : 'flex' }}
+                                    >
+                                      {isWinner ? (
+                                        <Trophy className="w-6 h-6" />
+                                      ) : participant.participant_name ? (
+                                        getUserInitials(
+                                          participant.participant_name.split(' ')[0],
+                                          participant.participant_name.split(' ')[1] || participant.participant_name.split(' ')[0]
+                                        )
+                                      ) : (
+                                        <User className="w-5 h-5" />
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-bold text-gray-900 text-base truncate">
+                                        {participant.participant_name || 
+                                         participant.team_name ||
+                                         participant.pair_name ||
+                                         (participant.first_name && participant.last_name 
+                                           ? `${participant.first_name} ${participant.last_name}` 
+                                           : participant.first_name || participant.last_name || 'Unknown')}
+                                      </p>
+                                      {isWinner && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded-full flex-shrink-0">
+                                          <Trophy className="w-3 h-3" />
+                                          WINNER
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                                      {participant.seed_number && (
+                                        <span key={`seed-${participant.id}`} className="font-medium">Seed #{participant.seed_number}</span>
+                                      )}
+                                      {(participant.email || participant.member_count) && (
+                                        <span key={`info-${participant.id}`} className="text-gray-400">
+                                          {participant.member_count ? `${participant.member_count} members` : participant.email}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex-shrink-0 flex flex-col items-end gap-2">
+                                    {isWinner && (
+                                      <span className="inline-flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-yellow-400 to-amber-500 text-white rounded-full text-xs font-bold shadow-md">
+                                        <Award className="w-4 h-4" />
+                                        CHAMPION
+                                      </span>
+                                    )}
+                                    {getStatusBadge()}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-center py-8">
+                            <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                            <p className="text-gray-500">No participants yet</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'matches' && (
+                    <MatchScheduleTab
+                      tournament={tournament}
+                      isOrganizer={isOrganizer()}
+                      onBulkSchedule={handleBulkSchedule}
+                      onRefresh={() => {
+                        dispatch(fetchTournament(id));
+                        fetchMatchesData();
+                      }}
+                    />
+                  )}
+
+                  {activeTab === 'bracket' && (
+                    <TournamentBracket
+                      tournament={tournament}
+                      matches={matches}
+                      onMatchClick={handleMatchClick}
+                      onScheduleUpdate={handleBulkSchedule}
+                      isOrganizer={isOrganizer()}
+                    />
+                  )}
+
+                  {activeTab === 'standings' && tournament.category === 'teams' && (
+                    <div className="space-y-6">
+                      <PointsTable 
+                        tournamentId={tournament.id}
+                        showAdvanced={true}
+                        sportType={tournament.sport_name?.toLowerCase() || 'football'}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+
+            {/* Old Participants List (keeping for reference - can be removed) */}
+            {false && tournament.status !== 'ongoing' && tournament.status !== 'completed' && tournament.status !== 'closed' && (
+            <div className="bg-white rounded-2xl shadow-lg p-8 border border-gray-100">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center">
+                    <Users className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Participants</h2>
+                    <p className="text-sm text-gray-500">
+                      {tournament.participant_count || 0}
+                      {tournament.max_participants && ` / ${tournament.max_participants}`} registered
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {Array.isArray(participants) && participants.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3">
+                  {participants.map((participant, index) => {
+                    const getStatusBadge = () => {
+                      if (participant.status === 'confirmed' && participant.payment_status === 'paid') {
+                        return (
+                          <div className="flex items-center gap-1">
+                            <CheckCircle className="w-4 h-4 text-primary-500" />
+                            <span className="text-xs text-primary-500 font-medium">Confirmed</span>
+                          </div>
+                        );
+                      }
+                      if (participant.payment_status === 'pending') {
+                        return (
+                          <div className="flex items-center gap-1">
+                            <Clock className="w-4 h-4 text-yellow-600" />
+                            <span className="text-xs text-yellow-600 font-medium">Pending Payment</span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="flex items-center gap-1">
+                          <User className="w-4 h-4 text-gray-400" />
+                          <span className="text-xs text-gray-500 font-medium capitalize">{participant.status}</span>
+                        </div>
+                      );
+                    };
+
+                    const getTypeIcon = () => {
+                      if (participant.participant_type === 'team') {
+                        return <Users className="w-5 h-5 text-white" />;
+                      }
+                      if (participant.participant_type === 'doubles') {
+                        return <Users className="w-5 h-5 text-white" />;
+                      }
+                      return <User className="w-5 h-5 text-white" />;
+                    };
+
+                    const getTypeBadge = () => {
+                      const config = {
+                        singles: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Singles' },
+                        doubles: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Doubles' },
+                        team: { bg: 'bg-primary-100', text: 'text-primary-600', label: 'Team' }
+                      };
+                      const type = participant.participant_type || 'singles';
+                      const c = config[type] || config.singles;
+                      return (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${c.bg} ${c.text}`}>
+                          {c.label}
+                        </span>
+                      );
+                    };
+
+                    return (
+                      <div 
+                        key={participant.id} 
+                        onClick={() => {
+                          setSelectedParticipant(participant);
+                          setShowParticipantDetails(true);
+                        }}
+                        className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 hover:shadow-md transition-all border border-gray-200 cursor-pointer"
+                      >
+                        <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                          {getTypeIcon()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-bold text-gray-900 text-base truncate">
+                              {participant.participant_name || 'Unknown'}
+                            </p>
+                            {getTypeBadge()}
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-gray-500">
+                            {participant.seed_number && (
+                              <span key={`seed-${participant.id}`} className="font-medium">Seed #{participant.seed_number}</span>
+                            )}
+                            {participant.user_email && participant.participant_type === 'singles' && (
+                              <span key={`email-${participant.id}`}>• {participant.user_email}</span>
+                            )}
+                            {participant.team_description && participant.participant_type === 'team' && (
+                              <span key={`desc-${participant.id}`}>• {participant.team_description}</span>
+                            )}
+                            <span key={`reg-${participant.id}`} className="text-gray-400">
+                              • Registered {formatDate(participant.registration_date)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0">
+                          {getStatusBadge()}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No participants yet</p>
+                  {tournament.status === 'open' && (
+                    <p className="text-sm text-gray-400 mt-1">Be the first to register!</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            )}
+          </div>
+
+          {/* Sidebar */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* Action Card */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100 sticky top-24">
+              <h3 className="font-bold text-gray-900 mb-4">Quick Actions</h3>
+
+              {/* Registration Status Based Buttons */}
+              {!isOrganizer() && (() => {
+                const regStatus = getUserRegistrationStatus();
+                
+                // Pending - Waiting for approval
+                if (regStatus === 'pending') {
+                  return (
+                    <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <Clock className="w-5 h-5 text-yellow-600" />
+                        <p className="font-semibold text-yellow-900">Pending Approval</p>
+                      </div>
+                      <p className="text-sm text-yellow-700">
+                        Waiting for organizer to accept your request
+                      </p>
+                    </div>
+                  );
+                }
+                
+                // Accepted - Approved but not locked
+                if (regStatus === 'accepted') {
+                  return (
+                    <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                        <p className="font-semibold text-green-900">Registration Accepted</p>
+                      </div>
+                      <p className="text-sm text-green-700">
+                        You're registered! Organizer will lock participants soon.
+                      </p>
+                    </div>
+                  );
+                }
+                
+                // Locked - Confirmed participant
+                if (regStatus === 'locked') {
+                  return (
+                    <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <Trophy className="w-5 h-5 text-blue-600" />
+                        <p className="font-semibold text-blue-900">Confirmed Participant</p>
+                      </div>
+                      <p className="text-sm text-blue-700">
+                        You're locked in! Good luck! 🎉
+                      </p>
+                    </div>
+                  );
+                }
+                
+                // Rejected - Organizer rejected the request
+                if (regStatus === 'rejected') {
+                  return (
+                    <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <AlertCircle className="w-5 h-5 text-red-600" />
+                        <p className="font-semibold text-red-900">Registration Rejected</p>
+                      </div>
+                      <p className="text-sm text-red-700">
+                        Organizer rejected your request to join
+                      </p>
+                    </div>
+                  );
+                }
+                
+                // Declined - User declined the invitation
+                if (regStatus === 'declined') {
+                  return (
+                    <div className="bg-gray-50 border-2 border-gray-300 rounded-lg p-4">
+                      <div className="flex items-center gap-3 mb-2">
+                        <XCircle className="w-5 h-5 text-gray-600" />
+                        <p className="font-semibold text-gray-900">Invitation Declined</p>
+                      </div>
+                      <p className="text-sm text-gray-700">
+                        You declined the invitation to this tournament
+                      </p>
+                    </div>
+                  );
+                }
+                
+                // Can register - Show register button
+                if (canRegister()) {
+                  return (
+                    <button
+                      onClick={handleRegisterClick}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+                    >
+                      <UserPlus className="w-5 h-5" />
+                      Register Now
+                    </button>
+                  );
+                }
+                
+                return null;
+              })()}
+
+              {isOrganizer() && (
+                <div className="relative group">
+                  <button
+                    onClick={() => {
+                      if (!tournament.admin_approved) {
+                        alert('Admin approval is required before you can manage this tournament.');
+                        return;
+                      }
+                      navigate(`/tournaments/${id}/manage`);
+                    }}
+                    disabled={!tournament.admin_approved}
+                    className={`w-full mb-3 flex items-center justify-center gap-2 px-4 py-3 font-semibold rounded-lg shadow-lg transition-all duration-200 ${
+                      tournament.admin_approved
+                        ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:shadow-xl transform hover:-translate-y-0.5 cursor-pointer'
+                        : 'bg-gray-400 text-gray-200 cursor-not-allowed opacity-60'
+                    }`}
+                  >
+                    <Activity className="w-5 h-5" />
+                    Manage Tournament
+                  </button>
+                  {!tournament.admin_approved && (
+                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                      Admin approval required
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* {tournament.status === 'ongoing' && (
+                <button
+                  onClick={() => navigate(`/tournaments/${id}/bracket`)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-primary-500 text-primary-500 font-semibold rounded-lg hover:bg-primary-50 transition-all duration-200"
+                >
+                  <Trophy className="w-5 h-5" />
+                  View Bracket
+                </button>
+              )} */}
+            </div>
+
+            {/* Registration Dates Card */}
+            {(tournament.registration_start || tournament.registration_end) && (
+              <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+                <h3 className="font-bold text-gray-900 mb-4">Registration Period</h3>
+                <div className="space-y-3">
+                  {tournament.registration_start && (
+                    <div className="flex items-start gap-3">
+                      <Calendar className="w-5 h-5 text-primary-500 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-500 font-medium">Opens</p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {formatDate(tournament.registration_start)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {tournament.registration_end && (
+                    <div className="flex items-start gap-3">
+                      <Clock className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-xs text-gray-500 font-medium">Closes</p>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {formatDate(tournament.registration_end)}
+                        </p>
+                        {(() => {
+                          const now = new Date();
+                          const regEnd = parseMySQLDate(tournament.registration_end);
+                          const daysLeft = Math.ceil((regEnd - now) / (1000 * 60 * 60 * 24));
+                          
+                          if (daysLeft > 0 && daysLeft <= 7) {
+                            return (
+                              <p className="text-xs text-orange-600 font-medium mt-1">
+                                ⚠️ {daysLeft} day{daysLeft !== 1 ? 's' : ''} left
+                              </p>
+                            );
+                          } else if (daysLeft <= 0) {
+                            return (
+                              <p className="text-xs text-red-600 font-medium mt-1">
+                                ❌ Registration closed
+                              </p>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Statistics Card */}
+            {tournament.statistics && (
+              <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+                <h3 className="font-bold text-gray-900 mb-4">Statistics</h3>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Total Participants</span>
+                    <span className="font-bold text-gray-900">{tournament.statistics.total_participants}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Total Matches</span>
+                    <span className="font-bold text-gray-900">{tournament.statistics.total_matches}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Completed Matches</span>
+                    <span className="font-bold text-gray-900">{tournament.statistics.completed_matches}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Register Modal */}
+      {showRegisterModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in duration-200">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <UserPlus className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                {tournament.tournament_type === 'open' ? 'Request to Join Tournament' : 'Register for Tournament'}
+              </h3>
+              <p className="text-gray-600">
+                {tournament.tournament_type === 'open' 
+                  ? `Send a request to join ${tournament.name}` 
+                  : `Confirm your registration for ${tournament.name}`
+                }
+              </p>
+            </div>
+
+            {tournament.entry_fee > 0 && (
+              <div className="bg-primary-50 border border-primary-200 rounded-lg p-4 mb-6">
+                <p className="text-sm text-primary-600 font-medium">Entry Fee: ₹{tournament.entry_fee}</p>
+                <p className="text-xs text-primary-500 mt-1">Payment will be required after registration</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRegisterModal(false)}
+                className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleRegister({})}
+                disabled={loading}
+                className="flex-1 px-4 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Registering...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Withdraw Modal */}
+      {showWithdrawModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in duration-200">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <UserMinus className="w-8 h-8 text-red-600" />
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Withdraw from Tournament</h3>
+              <p className="text-gray-600">Are you sure you want to withdraw?</p>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Reason (Optional)
+              </label>
+              <textarea
+                value={withdrawReason}
+                onChange={(e) => setWithdrawReason(e.target.value)}
+                rows={3}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none resize-none"
+                placeholder="Let the organizer know why you're withdrawing..."
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowWithdrawModal(false);
+                  setWithdrawReason('');
+                }}
+                className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleWithdraw}
+                disabled={loading}
+                className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Withdrawing...' : 'Withdraw'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in duration-200">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <DollarSign className="w-8 h-8 text-white" />
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Complete Payment</h3>
+              <p className="text-gray-600">Registration successful! Complete your payment to confirm.</p>
+            </div>
+
+            <div className="bg-gradient-to-br from-primary-50 to-primary-50 border border-primary-200 rounded-xl p-6 mb-6">
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-gray-700 font-medium">Tournament</span>
+                <span className="text-gray-900 font-bold">{tournament.name}</span>
+              </div>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-gray-700 font-medium">Entry Fee</span>
+                <span className="text-primary-600 font-bold text-xl">₹{tournament.entry_fee}</span>
+              </div>
+              <div className="pt-3 border-t border-primary-200">
+                <p className="text-xs text-primary-600">
+                  <CheckCircle className="w-3 h-3 inline mr-1" />
+                  Your spot is reserved for 24 hours
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              <button
+                onClick={handlePayment}
+                className="w-full px-4 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+              >
+                Pay with Card
+              </button>
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="w-full px-4 py-3 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all"
+              >
+                Pay Later
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 text-center">
+              Your registration will be confirmed once payment is received
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Team Selection Modal */}
+      {showTeamSelection && tournament && (
+        <TeamSelectionModal
+          tournament={tournament}
+          onClose={() => setShowTeamSelection(false)}
+          onSelectTeam={handleTeamSelect}
+          onCreateTeam={handleCreateTeam}
+        />
+      )}
+
+      {/* Partnership Selection Modal */}
+      {showPartnershipSelection && tournament && (
+        <PartnershipSelectionModal
+          tournament={tournament}
+          onClose={() => setShowPartnershipSelection(false)}
+          onSelectPartnership={handlePartnershipSelect}
+        />
+      )}
+
+      {/* Participant Details Modal */}
+      {showParticipantDetails && selectedParticipant && (
+        <ParticipantDetailsModal
+          participant={selectedParticipant}
+          tournament={tournament}
+          onClose={() => {
+            setShowParticipantDetails(false);
+            setSelectedParticipant(null);
+          }}
+        />
+      )}
+
+      {/* Match Details Modal */}
+      {showMatchDetails && selectedMatch && (
+        <MatchDetailsModal
+          match={selectedMatch}
+          tournament={tournament}
+          isOrganizer={isOrganizer()}
+          onClose={() => {
+            setShowMatchDetails(false);
+            setSelectedMatch(null);
+          }}
+          onUpdate={handleMatchUpdate}
+        />
+      )}
+
+      {/* Player Profile Modal */}
+      {showPlayerModal && selectedPlayerId && (
+        <PlayerProfileModal
+          userId={selectedPlayerId}
+          onClose={() => {
+            setShowPlayerModal(false);
+            setSelectedPlayerId(null);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+export default TournamentDetail;

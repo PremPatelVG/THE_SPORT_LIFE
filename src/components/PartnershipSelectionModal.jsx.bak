@@ -1,0 +1,333 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Users,
+  X,
+  CheckCircle,
+  AlertCircle,
+  Plus,
+  User,
+  Info,
+  UserPlus,
+  Mail
+} from 'lucide-react';
+import { getEligiblePartnerships, createPartnership } from '../services/partnershipService';
+import toast from 'react-hot-toast';
+
+const PartnershipSelectionModal = ({ tournament, onClose, onSelectPartnership }) => {
+  const navigate = useNavigate();
+  const [partnerships, setPartnerships] = useState([]);
+  const [selectedPartnership, setSelectedPartnership] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [partnerEmail, setPartnerEmail] = useState('');
+
+  useEffect(() => {
+    fetchEligiblePartnerships();
+  }, [tournament.id]);
+
+  const fetchEligiblePartnerships = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await getEligiblePartnerships(tournament.id);
+      setPartnerships(data);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to fetch partnerships');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = () => {
+    if (selectedPartnership) {
+      onSelectPartnership(selectedPartnership);
+    }
+  };
+
+  const handleCreatePartnership = async (e) => {
+    e.preventDefault();
+    
+    if (!partnerEmail.trim()) {
+      toast.error('Please enter partner email');
+      return;
+    }
+
+    try {
+      setCreating(true);
+      const newPartnership = await createPartnership({
+        partner_email: partnerEmail,
+        sport_id: tournament.sport_id,
+        tournament_id: tournament.id,
+        name: `Partnership for ${tournament.name}`
+      });
+      
+      toast.success('Partnership created successfully!');
+      setShowCreateForm(false);
+      setPartnerEmail('');
+      fetchEligiblePartnerships();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create partnership');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const eligiblePartnerships = partnerships.filter(p => p.can_register);
+  const ineligiblePartnerships = partnerships.filter(p => !p.can_register);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+              <Users className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-white">Select Your Partnership</h3>
+              <p className="text-sm text-blue-100">Choose a partner to register for {tournament.name}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-white/20 rounded-lg transition-all"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
+          {loading ? (
+            <div className="text-center py-12">
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-200 border-t-blue-600 mx-auto mb-4"></div>
+              <p className="text-gray-600">Loading partnerships...</p>
+            </div>
+          ) : error ? (
+            <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+              <span className="text-sm">{error}</span>
+            </div>
+          ) : partnerships.length === 0 && !showCreateForm ? (
+            <div className="text-center py-12">
+              <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h4 className="text-lg font-bold text-gray-900 mb-2">No Partnerships Yet</h4>
+              <p className="text-gray-600 mb-6">Create a partnership with your partner to participate</p>
+              <button
+                onClick={() => setShowCreateForm(true)}
+                className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200"
+              >
+                <Plus className="w-5 h-5" />
+                Create Partnership
+              </button>
+            </div>
+          ) : showCreateForm ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-lg font-bold text-gray-900">Create New Partnership</h4>
+                <button
+                  onClick={() => {
+                    setShowCreateForm(false);
+                    setPartnerEmail('');
+                  }}
+                  className="text-sm text-gray-600 hover:text-gray-900"
+                >
+                  Cancel
+                </button>
+              </div>
+              
+              <form onSubmit={handleCreatePartnership} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    <Mail className="w-4 h-4 inline mr-1" />
+                    Partner's Email
+                  </label>
+                  <input
+                    type="email"
+                    value={partnerEmail}
+                    onChange={(e) => setPartnerEmail(e.target.value)}
+                    placeholder="partner@example.com"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Enter the email address of your partner who is registered on the platform
+                  </p>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                    <div className="text-sm text-blue-800">
+                      <p className="font-semibold mb-1">Partnership Requirements:</p>
+                      <ul className="list-disc list-inside space-y-1 text-blue-700">
+                        <li>Your partner must be registered on the platform</li>
+                        <li>Both players will be able to register together</li>
+                        <li>Partnership is specific to this tournament</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={creating || !partnerEmail.trim()}
+                  className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                >
+                  {creating ? 'Creating...' : 'Create Partnership'}
+                </button>
+              </form>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Eligible Partnerships */}
+              {eligiblePartnerships.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    Available Partnerships ({eligiblePartnerships.length})
+                  </h4>
+                  <div className="space-y-3">
+                    {eligiblePartnerships.map((partnership) => (
+                      <div
+                        key={partnership.id}
+                        onClick={() => setSelectedPartnership(partnership)}
+                        className={`p-4 border-2 rounded-xl cursor-pointer transition-all ${
+                          selectedPartnership?.id === partnership.id
+                            ? 'border-blue-600 bg-blue-50 shadow-md'
+                            : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl flex items-center justify-center flex-shrink-0">
+                            <Users className="w-6 h-6 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h5 className="font-bold text-gray-900 mb-1">
+                              Partnership with {partnership.partner_name}
+                            </h5>
+                            <div className="flex items-center gap-4 text-sm text-gray-600">
+                              <span className="flex items-center gap-1">
+                                <User className="w-4 h-4" />
+                                {partnership.sport_name}
+                              </span>
+                              <span className="flex items-center gap-1 text-emerald-600">
+                                <CheckCircle className="w-4 h-4" />
+                                Ready to register
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex-shrink-0">
+                            <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+                              selectedPartnership?.id === partnership.id
+                                ? 'border-blue-600 bg-blue-600'
+                                : 'border-gray-300'
+                            }`}>
+                              {selectedPartnership?.id === partnership.id && (
+                                <CheckCircle className="w-4 h-4 text-white" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Ineligible Partnerships */}
+              {ineligiblePartnerships.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-gray-400" />
+                    Unavailable Partnerships ({ineligiblePartnerships.length})
+                  </h4>
+                  <div className="space-y-3">
+                    {ineligiblePartnerships.map((partnership) => (
+                      <div
+                        key={partnership.id}
+                        className="p-4 border-2 border-gray-200 rounded-xl bg-gray-50 opacity-60"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="w-12 h-12 bg-gray-400 rounded-xl flex items-center justify-center flex-shrink-0">
+                            <Users className="w-6 h-6 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h5 className="font-bold text-gray-700 mb-1">
+                              Partnership with {partnership.partner_name}
+                            </h5>
+                            {partnership.reasons && partnership.reasons.length > 0 && (
+                              <div className="space-y-1">
+                                {partnership.reasons.map((reason, index) => (
+                                  <p key={index} className="text-xs text-red-600 flex items-start gap-1">
+                                    <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                                    {reason}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Create New Partnership Option */}
+              <div className="pt-4 border-t border-gray-200">
+                <button
+                  onClick={() => setShowCreateForm(true)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-blue-300 text-blue-600 font-semibold rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-all duration-200"
+                >
+                  <Plus className="w-5 h-5" />
+                  Create New Partnership
+                </button>
+              </div>
+
+              {/* Info Box */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-blue-800">
+                    <p className="font-semibold mb-1">Partnership Requirements:</p>
+                    <ul className="list-disc list-inside space-y-1 text-blue-700">
+                      <li>Both partners must be registered on the platform</li>
+                      <li>Partnership must be created before registration</li>
+                      <li>Only one partner needs to register the partnership</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        {!loading && partnerships.length > 0 && !showCreateForm && (
+          <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleRegister}
+              disabled={!selectedPartnership}
+              className="px-6 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+            >
+              Register Partnership
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default PartnershipSelectionModal;

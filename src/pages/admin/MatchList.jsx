@@ -1,0 +1,361 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Calendar,
+  MapPin,
+  Clock,
+  Search,
+  Loader,
+  AlertCircle,
+  Eye,
+  Trophy,
+  CheckCircle,
+  PlayCircle,
+  XCircle,
+  X,
+  Filter,
+  Power
+} from 'lucide-react';
+import adminApi from '../../config/adminApi';
+import toast from 'react-hot-toast';
+
+const MatchList = () => {
+  const navigate = useNavigate();
+  const [matches, setMatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [filters, setFilters] = useState({
+    status: '',
+    sport: '',
+    search: '',
+    startDate: '',
+    endDate: ''
+  });
+  const [sports, setSports] = useState([]);
+
+  useEffect(() => {
+    fetchMatches();
+    fetchSports();
+  }, [filters]);
+
+  const fetchSports = async () => {
+    try {
+      const response = await adminApi.get('/sports');
+      setSports(response.data.data || []);
+    } catch (err) {
+      console.error('Failed to fetch sports:', err);
+    }
+  };
+
+  const fetchMatches = async () => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (filters.status) params.append('status', filters.status);
+      if (filters.sport) params.append('sport', filters.sport);
+      if (filters.search) params.append('search', filters.search);
+      if (filters.startDate) params.append('startDate', filters.startDate);
+      if (filters.endDate) params.append('endDate', filters.endDate);
+
+      const response = await adminApi.get(`/matches?${params.toString()}`);
+      setMatches(response.data.data || []);
+    } catch (err) {
+      console.error('Failed to fetch matches:', err);
+      setError('Failed to load matches');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      status: '',
+      sport: '',
+      search: '',
+      startDate: '',
+      endDate: ''
+    });
+  };
+
+  const toggleMatchActive = async (matchId, currentStatus) => {
+    try {
+      const newStatus = !currentStatus;
+      await adminApi.put(`/matches/${matchId}/toggle-active`, {
+        is_active: newStatus
+      });
+      
+      toast.success(`Match ${newStatus ? 'activated' : 'deactivated'} successfully`);
+      fetchMatches(); // Refresh list
+    } catch (err) {
+      console.error('Failed to toggle match status:', err);
+      toast.error(err.response?.data?.error || 'Failed to update match status');
+    }
+  };
+
+  const hasActiveFilters = filters.status || filters.sport || filters.search || filters.startDate || filters.endDate;
+
+  const handleSearch = (e) => {
+    setFilters({ ...filters, search: e.target.value });
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  const formatTime = (timeString) => {
+    if (!timeString) return 'N/A';
+    return new Date(`2000-01-01T${timeString}`).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusBadge = (status) => {
+    const badges = {
+      scheduled: { bg: 'bg-blue-100', text: 'text-blue-700', icon: Clock, label: 'Scheduled' },
+      ongoing: { bg: 'bg-green-100', text: 'text-green-700', icon: PlayCircle, label: 'Ongoing' },
+      completed: { bg: 'bg-purple-100', text: 'text-purple-700', icon: CheckCircle, label: 'Completed' },
+      cancelled: { bg: 'bg-red-100', text: 'text-red-700', icon: XCircle, label: 'Cancelled' }
+    };
+    const badge = badges[status] || badges.scheduled;
+    const Icon = badge.icon;
+    
+    return (
+      <span className={`flex items-center gap-1 px-3 py-1 ${badge.bg} ${badge.text} text-xs font-semibold rounded-full`}>
+        <Icon className="w-3 h-3" />
+        {badge.label}
+      </span>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-6 flex items-start gap-3">
+        <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+        <div>
+          <h3 className="font-semibold text-red-900">Error</h3>
+          <p className="text-red-700">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header & Filters */}
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Trophy className="w-7 h-7 text-primary-500" />
+              All Matches
+            </h2>
+            <p className="text-gray-600 mt-1">{matches.length} match(es) found</p>
+          </div>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+            >
+              <X className="w-4 h-4" />
+              Clear Filters
+            </button>
+          )}
+        </div>
+
+        {/* Filters - Single Row */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+          {/* Search */}
+          <div className="lg:col-span-1">
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Search
+            </label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search tournament or participants..."
+                value={filters.search}
+                onChange={handleSearch}
+                className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Sport Filter */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Sport
+            </label>
+            <select
+              value={filters.sport}
+              onChange={(e) => setFilters({ ...filters, sport: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-white"
+            >
+              <option value="">All Sports</option>
+              {sports.map((sport) => (
+                <option key={sport.id} value={sport.name}>{sport.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Status Filter */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Status
+            </label>
+            <select
+              value={filters.status}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-white"
+            >
+              <option value="">All Status</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="in_progress">In Progress</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+
+          {/* Start Date */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Start Date
+            </label>
+            <input
+              type="date"
+              value={filters.startDate}
+              onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+            />
+          </div>
+
+          {/* End Date */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              End Date
+            </label>
+            <input
+              type="date"
+              value={filters.endDate}
+              onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Matches List */}
+      {matches.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm p-12 text-center">
+          <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-xl font-bold text-gray-900 mb-2">No Matches Found</h3>
+          <p className="text-gray-600">Try adjusting your filters</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4">
+          {matches.map((match) => (
+            <div
+              key={match.id}
+              className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow"
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-lg font-bold text-gray-900">
+                      Match #{match.match_number}
+                    </h3>
+                    {getStatusBadge(match.status)}
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
+                    <span className="font-medium text-primary-600">
+                      {match.round_name || `Round ${match.round_number}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <Trophy className="w-4 h-4" />
+                    <span className="font-medium">{match.tournament_name}</span>
+                    <span className="text-gray-400">•</span>
+                    <span>{match.sport_name}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Match Details */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2 text-sm">
+                  <Calendar className="w-4 h-4 text-blue-600" />
+                  <div>
+                    <p className="text-gray-600">Date</p>
+                    <p className="font-medium text-gray-900">{formatDate(match.match_date)}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-sm">
+                  <Clock className="w-4 h-4 text-green-600" />
+                  <div>
+                    <p className="text-gray-600">Time</p>
+                    <p className="font-medium text-gray-900">{formatTime(match.match_time)}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-sm">
+                  <MapPin className="w-4 h-4 text-red-600" />
+                  <div>
+                    <p className="text-gray-600">Venue</p>
+                    <p className="font-medium text-gray-900">
+                      {match.venue_name || 'TBD'}
+                      {match.court_name && ` - ${match.court_name}`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleMatchActive(match.id, match.is_active);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    match.is_active
+                      ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                  title={match.is_active ? 'Click to deactivate' : 'Click to activate'}
+                >
+                  <Power className="w-3.5 h-3.5" />
+                  {match.is_active ? 'Active' : 'Inactive'}
+                </button>
+                
+                <button
+                  onClick={() => window.open(`/matches/${match.id}`, '_blank')}
+                  className="flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors text-sm"
+                >
+                  <Eye className="w-4 h-4" />
+                  View Details
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default MatchList;

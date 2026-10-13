@@ -1,0 +1,149 @@
+import { useState } from 'react';
+import {
+  Mail,
+  X,
+  Clock,
+  User,
+  AlertCircle,
+  CheckCircle,
+  Loader
+} from 'lucide-react';
+import { cancelInvitation } from '../services/teamService';
+import { formatDateMonthDay } from '../utils/dateFormatter';
+
+const TeamPendingInvitations = ({ teamId, invitations, onInvitationCancelled }) => {
+  const [cancellingId, setCancellingId] = useState(null);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+
+  const handleCancel = async (invitationId, userName) => {
+    if (!window.confirm(`Cancel invitation to ${userName}?`)) {
+      return;
+    }
+
+    setCancellingId(invitationId);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await cancelInvitation(invitationId);
+      setSuccess(`Invitation to ${userName} has been cancelled`);
+      
+      // Notify parent to refresh
+      if (onInvitationCancelled) {
+        setTimeout(() => {
+          onInvitationCancelled();
+          setSuccess(null);
+        }, 2000);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to cancel invitation');
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  if (!invitations || invitations.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-12 h-12 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-xl flex items-center justify-center">
+          <Mail className="w-6 h-6 text-white" />
+        </div>
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Pending Invitations</h3>
+          <p className="text-sm text-gray-600">
+            {invitations.length} invitation(s) waiting for response
+          </p>
+        </div>
+      </div>
+
+      {/* Success/Error Messages */}
+      {success && (
+        <div className="bg-primary-50 border-l-4 border-primary-500 text-primary-600 px-4 py-3 rounded-lg mb-4 flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{success}</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg mb-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{error}</span>
+        </div>
+      )}
+
+      {/* Invitations List */}
+      <div className="space-y-3">
+        {invitations.map((invitation) => (
+          <div
+            key={invitation.id}
+            className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:border-yellow-300 hover:bg-yellow-50 transition-all"
+          >
+            <div className="flex items-center gap-4 flex-1">
+              {/* Avatar */}
+              <div className="w-10 h-10 bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-full flex items-center justify-center text-white font-bold text-sm">
+                {invitation.invited_user_name?.[0] || '?'}
+              </div>
+
+              {/* Invitation Info */}
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-gray-900 truncate">
+                  {invitation.invited_user_name || 'Unknown User'}
+                </p>
+                <div className="flex items-center gap-3 text-sm text-gray-600 mt-1">
+                  <span className="flex items-center gap-1">
+                    <User className="w-3 h-3" />
+                    {invitation.invited_user_email}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {formatDateMonthDay(invitation.invited_at)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-yellow-100 text-yellow-700">
+                <Clock className="w-3.5 h-3.5" />
+                Pending
+              </span>
+
+              {/* Cancel Button */}
+              <button
+                onClick={() => handleCancel(invitation.id, invitation.invited_user_name)}
+                disabled={cancellingId === invitation.id}
+                className="flex items-center gap-2 px-3 py-2 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cancellingId === invitation.id ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Cancelling...
+                  </>
+                ) : (
+                  <>
+                    <X className="w-4 h-4" />
+                    Cancel
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Info */}
+      <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+        <p className="text-xs text-yellow-800">
+          <AlertCircle className="w-3 h-3 inline mr-1" />
+          Invited users will receive a notification. They must accept to join the team.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export default TeamPendingInvitations;

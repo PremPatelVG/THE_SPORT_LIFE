@@ -1,0 +1,1558 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { 
+  Trophy, ArrowLeft, Calendar, MapPin, User, 
+  Target, AlertCircle, Activity, TrendingUp, Award,
+  Users, Timer, Flag
+} from 'lucide-react';
+import api from '../config/api';
+
+const MatchScoreHistory = () => {
+  const { matchId } = useParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab') || 'all';
+  const sourceParam = searchParams.get('source');
+  const tournamentIdParam = searchParams.get('tournamentId');
+  const [match, setMatch] = useState(null);
+  const [liveScore, setLiveScore] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [timingSummary, setTimingSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchMatchDetails();
+  }, [matchId]);
+
+  const fetchMatchDetails = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch match details with full participant info
+      const matchRes = await api.get(`/matches/${matchId}/details`);
+      const matchData = matchRes.data.data;
+      
+      // Construct participant names based on category
+      if (matchData.tournament_category === 'singles') {
+        // Singles: user first_name + last_name
+        if (matchData.participant1_details?.user) {
+          matchData.participant1_name = `${matchData.participant1_details.user.first_name} ${matchData.participant1_details.user.last_name}`;
+        }
+        if (matchData.participant2_details?.user) {
+          matchData.participant2_name = `${matchData.participant2_details.user.first_name} ${matchData.participant2_details.user.last_name}`;
+        }
+      } else if (matchData.tournament_category === 'doubles') {
+        // Doubles: player1 / player2
+        if (matchData.participant1_details) {
+          const p1 = matchData.participant1_details.player1;
+          const p2 = matchData.participant1_details.player2;
+          matchData.participant1_name = `${p1?.first_name} ${p1?.last_name} / ${p2?.first_name} ${p2?.last_name}`;
+        }
+        if (matchData.participant2_details) {
+          const p1 = matchData.participant2_details.player1;
+          const p2 = matchData.participant2_details.player2;
+          matchData.participant2_name = `${p1?.first_name} ${p1?.last_name} / ${p2?.first_name} ${p2?.last_name}`;
+        }
+      } else if (matchData.tournament_category === 'teams') {
+        // Teams: team name
+        if (matchData.participant1_details) {
+          matchData.participant1_name = matchData.participant1_details.name;
+        }
+        if (matchData.participant2_details) {
+          matchData.participant2_name = matchData.participant2_details.name;
+        }
+      }
+      
+      // console.log('\n========== PARTICIPANT NAMES CONSTRUCTED ==========');
+      // console.log('📂 Tournament Category:', matchData.tournament_category);
+      // console.log('👤 Participant 1 Name:', matchData.participant1_name);
+      // console.log('👤 Participant 2 Name:', matchData.participant2_name);
+      
+      setMatch(matchData);
+      
+      // Parse live_score if it's a string
+      const parsedLiveScore = typeof matchData.live_score === 'string' 
+        ? JSON.parse(matchData.live_score) 
+        : matchData.live_score;
+      setLiveScore(parsedLiveScore);
+      
+      // console.log('\n========== MATCH DETAILS FETCH ==========');
+      // console.log('🏟️ Sport Name:', matchData.sport_name);
+      // console.log('📊 Full Live Score Data:', JSON.stringify(parsedLiveScore, null, 2));
+      // console.log('⏱️ Timing Summary from live_score:', JSON.stringify(parsedLiveScore?.timing_summary, null, 2));
+      // console.log('🕐 Period Duration:', parsedLiveScore?.period_duration);
+      // console.log('⏸️ Break Duration:', parsedLiveScore?.break_duration);
+      // console.log('\n🎮 PARTICIPANT 1 DATA:');
+      // console.log('  - game_scores:', parsedLiveScore?.participant1?.game_scores);
+      // console.log('  - games_won:', parsedLiveScore?.participant1?.games_won);
+      // console.log('  - set_scores:', parsedLiveScore?.participant1?.set_scores);
+      // console.log('  - sets_won:', parsedLiveScore?.participant1?.sets_won);
+      // console.log('\n🎮 PARTICIPANT 2 DATA:');
+      // console.log('  - game_scores:', parsedLiveScore?.participant2?.game_scores);
+      // console.log('  - games_won:', parsedLiveScore?.participant2?.games_won);
+      // console.log('  - set_scores:', parsedLiveScore?.participant2?.set_scores);
+      // console.log('  - sets_won:', parsedLiveScore?.participant2?.sets_won);
+
+      // Fetch match events
+      let fetchedEvents = [];
+      try {
+        const eventsRes = await api.get(`/matches/${matchId}/events`);
+        fetchedEvents = eventsRes.data.data || [];
+        setEvents(fetchedEvents);
+      } catch (err) {
+        console.error('Error fetching events:', err);
+        setEvents([]);
+      }
+
+      // Fetch match timing summary
+      try {
+        const timingRes = await api.get(`/matches/${matchId}/timing`);
+        let timing = timingRes.data.data || null;
+        
+        // console.log('\n========== TIMING API RESPONSE ==========');
+        // console.log('🔍 Full Timing API Response:', JSON.stringify(timing, null, 2));
+        // console.log('📦 Segments from API:', JSON.stringify(timing?.segments, null, 2));
+        // console.log('📊 Number of segments:', timing?.segments?.length || 0);
+        // console.log('🏃 Sport Name:', matchData.sport_name);
+        // console.log('⚙️ Will recalculate?', timing && matchData.sport_name !== 'Football' && (!timing.segments || timing.segments.length === 0));
+        
+        // For Football, ONLY build from live_score.timing_summary if segments are missing or empty
+        if (matchData.sport_name === 'Football' && 
+            parsedLiveScore?.timing_summary && 
+            (!timing?.segments || timing.segments.length === 0)) {
+          // console.log('⚠️ No segments from API, building from live_score.timing_summary');
+          timing = buildFootballTimingFromLiveScore(parsedLiveScore, timing, matchData);
+        } else if (matchData.sport_name === 'Football' && timing?.segments?.length > 0) {
+          // console.log('✅ Using segments from API (database)');
+        }
+        
+        // For set/game-based sports, calculate durations from events ONLY if segments are missing or empty
+        // ✅ FIX: Don't override database segments if they already exist with valid durations
+        if (timing && matchData.sport_name !== 'Football' && 
+            (!timing.segments || timing.segments.length === 0)) {
+          // console.log('⚠️ No segments from database, calculating from events');
+          timing = calculateGameSetDurations(matchData, fetchedEvents, timing);
+        } else if (timing?.segments?.length > 0) {
+          // console.log('✅ Using segments from database (not recalculating from events)');
+        }
+        
+        // ✅ FALLBACK: Calculate total duration from actual start/end times if null
+        if (timing && (!timing.total_duration_seconds || !timing.total_duration_formatted)) {
+          if (matchData.actual_start_time && matchData.actual_end_time) {
+            const startTime = new Date(matchData.actual_start_time.replace(' ', 'T'));
+            const endTime = new Date(matchData.actual_end_time.replace(' ', 'T'));
+            const durationMs = endTime - startTime;
+            const durationSeconds = Math.floor(durationMs / 1000);
+            
+            const hours = Math.floor(durationSeconds / 3600);
+            const minutes = Math.floor((durationSeconds % 3600) / 60);
+            const seconds = durationSeconds % 60;
+            
+            timing.total_duration_seconds = durationSeconds;
+            timing.total_duration_formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            timing.total_duration_minutes = durationSeconds / 60;
+            
+            // console.log('⚠️ Total duration was null, calculated from actual times:', {
+            //   start: matchData.actual_start_time,
+            //   end: matchData.actual_end_time,
+            //   duration_seconds: durationSeconds,
+            //   duration_formatted: timing.total_duration_formatted
+            // });
+          }
+        }
+        
+        // console.log('\n========== FINAL TIMING SUMMARY ==========');
+        // console.log('✅ Final Timing Summary:', JSON.stringify(timing, null, 2));
+        // console.log('📊 Total Segments:', timing?.segments?.length || 0);
+        if (timing?.segments) {
+          timing.segments.forEach((seg, idx) => {
+            // console.log(`\nSegment ${idx + 1}:`, {
+            //   type: seg.segment_type,
+            //   number: seg.segment_number,
+            //   duration_seconds: seg.duration_seconds,
+            //   additional_time_seconds: seg.additional_time_seconds,
+            //   duration_formatted: seg.duration_formatted
+            // });
+          });
+        }
+        // console.log('========================================\n');
+        setTimingSummary(timing);
+      } catch (err) {
+        console.error('Error fetching timing summary:', err);
+        setTimingSummary(null);
+      }
+
+      setLoading(false);
+    } catch (err) {
+      console.error('Error fetching match details:', err);
+      setError(err.response?.data?.error || 'Failed to load match details');
+      setLoading(false);
+    }
+  };
+
+  // Build Football timing from live_score.timing_summary if segments are missing
+  const buildFootballTimingFromLiveScore = (liveScore, timing, matchData) => {
+    // console.log('\n========== BUILDING FOOTBALL TIMING ==========');
+    // console.log('📥 Input liveScore:', JSON.stringify(liveScore, null, 2));
+    // console.log('📥 Input timing from API:', JSON.stringify(timing, null, 2));
+    // console.log('📥 Match Data:', JSON.stringify(matchData, null, 2));
+    
+    const timingSummary = liveScore.timing_summary;
+    // console.log('\n🔍 Timing Summary:', JSON.stringify(timingSummary, null, 2));
+    
+    if (!timingSummary) {
+      // console.log('❌ No timing_summary found in live_score');
+      return timing;
+    }
+    
+    const segments = [];
+    const startTime = matchData.actual_start_time ? new Date(matchData.actual_start_time) : new Date();
+    // console.log('\n⏰ Match Start Time:', startTime.toISOString());
+    
+    // First Half
+    if (timingSummary.first_half) {
+      const half1 = timingSummary.first_half;
+      // console.log('\n🟢 Processing First Half:', JSON.stringify(half1, null, 2));
+      
+      const half1Start = startTime;
+      const half1End = new Date(half1Start.getTime() + (half1.elapsed || 0) * 1000);
+      
+      const segment1 = {
+        segment_type: 'half',
+        segment_number: 1,
+        start_time: half1Start.toISOString(),
+        end_time: half1End.toISOString(),
+        duration_seconds: half1.elapsed || 0,
+        duration_formatted: formatSecondsToTime(half1.elapsed || 0),
+        additional_time_seconds: half1.additional_time || 0,
+        status: 'completed'
+      };
+      
+      // console.log('✅ First Half Segment:', JSON.stringify(segment1, null, 2));
+      segments.push(segment1);
+    } else {
+      // console.log('⚠️ No first_half data found');
+    }
+    
+    // Break
+    if (timingSummary.break && timingSummary.first_half) {
+      const breakData = timingSummary.break;
+      // console.log('\n🟡 Processing Break:', JSON.stringify(breakData, null, 2));
+      
+      const breakStart = new Date(startTime.getTime() + (timingSummary.first_half.elapsed || 0) * 1000);
+      const breakEnd = new Date(breakStart.getTime() + (breakData.elapsed || 0) * 1000);
+      
+      const breakSegment = {
+        segment_type: 'break',
+        segment_number: 1,
+        start_time: breakStart.toISOString(),
+        end_time: breakEnd.toISOString(),
+        duration_seconds: breakData.elapsed || 0,
+        duration_formatted: formatSecondsToTime(breakData.elapsed || 0),
+        additional_time_seconds: breakData.additional_time || 0,
+        status: 'completed'
+      };
+      
+      // console.log('✅ Break Segment:', JSON.stringify(breakSegment, null, 2));
+      segments.push(breakSegment);
+    } else {
+      // console.log('⚠️ No break data found');
+    }
+    
+    // Second Half
+    if (timingSummary.second_half && timingSummary.first_half && timingSummary.break) {
+      const half2 = timingSummary.second_half;
+      // console.log('\n🔵 Processing Second Half:', JSON.stringify(half2, null, 2));
+      
+      const half2Start = new Date(startTime.getTime() + 
+        ((timingSummary.first_half.elapsed || 0) + (timingSummary.break.elapsed || 0)) * 1000);
+      const half2End = new Date(half2Start.getTime() + (half2.elapsed || 0) * 1000);
+      
+      const segment2 = {
+        segment_type: 'half',
+        segment_number: 2,
+        start_time: half2Start.toISOString(),
+        end_time: half2End.toISOString(),
+        duration_seconds: half2.elapsed || 0,
+        duration_formatted: formatSecondsToTime(half2.elapsed || 0),
+        additional_time_seconds: half2.additional_time || 0,
+        status: 'completed'
+      };
+      
+      // console.log('✅ Second Half Segment:', JSON.stringify(segment2, null, 2));
+      segments.push(segment2);
+    } else {
+      // console.log('⚠️ No second_half data found');
+    }
+    
+    // Calculate total duration
+    const totalSeconds = segments.reduce((sum, seg) => sum + (seg.duration_seconds || 0), 0);
+    // console.log('\n📊 Total Segments Created:', segments.length);
+    // console.log('⏱️ Total Duration (seconds):', totalSeconds);
+    
+    const finalTiming = {
+      ...timing,
+      segments: segments.length > 0 ? segments : timing?.segments || [],
+      total_duration_seconds: totalSeconds,
+      total_duration_formatted: formatSecondsToTime(totalSeconds),
+      total_duration_minutes: totalSeconds / 60
+    };
+    
+    // console.log('\n🎯 Final Timing Object:', JSON.stringify(finalTiming, null, 2));
+    // console.log('========== END BUILDING FOOTBALL TIMING ==========\n');
+    
+    return finalTiming;
+  };
+  
+  // Helper function to format seconds to HH:MM:SS
+  const formatSecondsToTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+  
+  // Calculate game/set durations from event timestamps
+  const calculateGameSetDurations = (matchData, events, timing) => {
+    if (!events || events.length === 0) return timing;
+    
+    const startTime = matchData.actual_start_time ? new Date(matchData.actual_start_time) : null;
+    const endTime = matchData.actual_end_time ? new Date(matchData.actual_end_time) : null;
+    
+    // Calculate total duration
+    if (startTime && endTime) {
+      const totalSeconds = Math.floor((endTime - startTime) / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      timing.total_duration_formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      timing.total_duration_minutes = totalSeconds / 60;
+    }
+    
+    // Group events by game/set
+    const gameSetMap = new Map();
+    events.forEach(event => {
+      const key = event.current_game || event.current_set;
+      if (!key) return;
+      
+      if (!gameSetMap.has(key)) {
+        gameSetMap.set(key, []);
+      }
+      gameSetMap.get(key).push(event);
+    });
+    
+    // Calculate duration for each game/set
+    const segments = [];
+    gameSetMap.forEach((gameEvents, gameNumber) => {
+      if (gameEvents.length === 0) return;
+      
+      // Sort by created_at
+      gameEvents.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      
+      const firstEvent = new Date(gameEvents[0].created_at);
+      const lastEvent = new Date(gameEvents[gameEvents.length - 1].created_at);
+      
+      const durationSeconds = Math.floor((lastEvent - firstEvent) / 1000);
+      const minutes = Math.floor(durationSeconds / 60);
+      const seconds = durationSeconds % 60;
+      
+      segments.push({
+        segment_number: gameNumber,
+        segment_type: gameEvents[0].current_game ? 'game' : 'set',
+        start_time: gameEvents[0].created_at,
+        end_time: gameEvents[gameEvents.length - 1].created_at,
+        duration_seconds: durationSeconds,
+        duration_formatted: `${String(Math.floor(durationSeconds / 3600)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`,
+        duration_minutes: durationSeconds / 60,
+        additional_time_seconds: 0,
+        status: 'completed'
+      });
+    });
+    
+    timing.segments = segments.sort((a, b) => a.segment_number - b.segment_number);
+    
+    return timing;
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const getWinnerName = () => {
+    // console.log('\n========== GET WINNER NAME ==========');
+    // console.log('🏆 Match Winner from liveScore:', liveScore?.match_winner);
+    // console.log('🏆 Winner Participant ID from match:', match?.winner_participant_id);
+    // console.log('👥 Participant 1 ID:', match?.participant1_id);
+    // console.log('👥 Participant 2 ID:', match?.participant2_id);
+    // console.log('👥 Participant 1 Name:', match?.participant1_name);
+    // console.log('👥 Participant 2 Name:', match?.participant2_name);
+    
+    // First, try to get winner from liveScore.match_winner
+    let winnerSide = liveScore?.match_winner;
+    
+    // If not found in liveScore, check winner_participant_id from match
+    if (!winnerSide && match?.winner_participant_id) {
+      // console.log('🔍 Using winner_participant_id to determine winner');
+      if (match.winner_participant_id === match.participant1_id) {
+        winnerSide = 'participant1';
+      } else if (match.winner_participant_id === match.participant2_id) {
+        winnerSide = 'participant2';
+      }
+      // console.log('✅ Winner Side determined from winner_participant_id:', winnerSide);
+    }
+    
+    if (!winnerSide) {
+      // console.log('❌ No match winner found');
+      return 'N/A';
+    }
+    
+    if (winnerSide === 'draw') {
+      // console.log('🤝 Match is a draw');
+      return 'Draw';
+    }
+    
+    // console.log('✅ Winner Side:', winnerSide);
+    
+    if (winnerSide !== 'participant1' && winnerSide !== 'participant2') {
+      // console.log('❌ Invalid winner side');
+      return 'N/A';
+    }
+    
+    // Use participant_name from backend (already formatted for singles/doubles/teams)
+    const winnerName = winnerSide === 'participant1' 
+      ? (match?.participant1_name || 'Participant 1')
+      : (match?.participant2_name || 'Participant 2');
+    
+    // console.log('✅ Winner Name:', winnerName);
+    // console.log('========================================\n');
+    
+    return winnerName;
+  };
+
+  const getEventIcon = (eventType) => {
+    switch (eventType) {
+      case 'goal':
+        return <Target className="w-5 h-5 text-green-600" />;
+      case 'yellow_card':
+        return <AlertCircle className="w-5 h-5 text-yellow-500" />;
+      case 'red_card':
+        return <AlertCircle className="w-5 h-5 text-red-600" />;
+      case 'substitution':
+        return <Users className="w-5 h-5 text-blue-600" />;
+      default:
+        return <Activity className="w-5 h-5 text-gray-600" />;
+    }
+  };
+
+  const getEventLabel = (event) => {
+    const eventType = event.event_type;
+    
+    switch (eventType) {
+      case 'goal':
+        return 'Goal';
+      case 'yellow_card':
+        return 'Yellow Card';
+      case 'red_card':
+        return 'Red Card';
+      case 'substitution':
+        return 'Substitution';
+      case 'point':
+        // Use stored excitement from database
+        const excitement = event.metadata?.excitement || 'Point scored!';
+        const playerName = event.player_name || '';
+        if (playerName) {
+          return `${excitement} ${playerName} scored a point`;
+        }
+        return excitement;
+      default:
+        return eventType;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-500 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading match details...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-lg p-8 max-w-md w-full text-center">
+          <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Error</h2>
+          <p className="text-gray-600 mb-6">{error}</p>
+          <button
+            onClick={() => navigate('/matches')}
+            className="px-6 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-all"
+          >
+            Back to Matches
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!match) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+        <p className="text-gray-600">Match not found</p>
+      </div>
+    );
+  }
+
+  // Get sport-specific scores
+  const sportName = match.sport_name || '';
+  // console.log("dev-----------",sportName);
+  
+  const isTimeBased = sportName === 'Football';
+  const isSetBased = ['Tennis', 'Padel', 'Volleyball'].includes(sportName);
+  const isGameBased = ['Badminton', 'Table Tennis', 'Squash', 'Pickleball'].includes(sportName);
+  
+  // Calculate scores - try from liveScore first, then from events
+  let participant1Score = 0;
+  let participant2Score = 0;
+    
+  if (isSetBased) {
+    // Try sets_won first
+    participant1Score = liveScore?.participant1?.sets_won;
+    participant2Score = liveScore?.participant2?.sets_won;
+    
+    // If not available, try from last event
+    if ((participant1Score === undefined || participant1Score === null) && events && events.length > 0) {
+      const lastEvent = events[0];
+      participant1Score = lastEvent.score_snapshot?.participant1?.sets_won || 0;
+      participant2Score = lastEvent.score_snapshot?.participant2?.sets_won || 0;
+    }
+    
+    participant1Score = participant1Score ?? 0;
+    participant2Score = participant2Score ?? 0;
+  } else if (isGameBased) {
+    // Try games_won first
+    participant1Score = liveScore?.participant1?.games_won;
+    participant2Score = liveScore?.participant2?.games_won;
+    
+    // If not available, try from last event
+    if ((participant1Score === undefined || participant1Score === null) && events && events.length > 0) {
+      const lastEvent = events[0];
+      participant1Score = lastEvent.score_snapshot?.participant1?.games_won || 0;
+      participant2Score = lastEvent.score_snapshot?.participant2?.games_won || 0;
+    }
+    
+    participant1Score = participant1Score ?? 0;
+    participant2Score = participant2Score ?? 0;
+  } else {
+    // Time-based (Football) - use goals
+    participant1Score = liveScore?.participant1?.goals || 0;
+    participant2Score = liveScore?.participant2?.goals || 0;
+  }
+    
+  const participant1YellowCards = liveScore?.participant1?.yellow_cards || 0;
+  const participant2YellowCards = liveScore?.participant2?.yellow_cards || 0;
+  const participant1RedCards = liveScore?.participant1?.red_cards || 0;
+  const participant2RedCards = liveScore?.participant2?.red_cards || 0;
+  
+  const getScoreLabel = () => {
+    if (isSetBased) return 'Sets Won';
+    if (isGameBased) return 'Games Won';
+    return 'Goals';
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-primary-500 to-primary-600 text-white py-6 px-4 shadow-lg">
+        <div className="max-w-6xl mx-auto">
+          <button
+            onClick={() => {
+              if (sourceParam === 'tournament' && tournamentIdParam) {
+                navigate(`/tournaments/${tournamentIdParam}?tab=matches`);
+              } else {
+                navigate(`/matches?tab=${tabParam}`);
+              }
+            }}
+            className="flex items-center gap-2 text-white/90 hover:text-white mb-4 transition-all"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            {sourceParam === 'tournament' ? 'Back to Tournament' : 'Back to Matches'}
+          </button>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">Match Score History</h1>
+              <p className="text-white/80">Complete match details and statistics</p>
+            </div>
+            <Trophy className="w-16 h-16 text-white/20" />
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto p-4 space-y-6">
+        {/* Match Status Banner */}
+        {match.status === 'completed' && (
+          <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 text-white rounded-xl shadow-lg p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <Trophy className="w-12 h-12" />
+                <div>
+                  <h2 className="text-2xl font-bold">Match Completed</h2>
+                  <p className="text-white/90">Winner: <span className="font-bold">{getWinnerName()}</span></p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-sm text-white/80">Final Score</p>
+                <p className="text-4xl font-bold">
+                  {participant1Score} - {participant2Score}
+                  {liveScore?.penalty_shootout?.kicks?.length > 0 && (
+                    <span className="text-2xl ml-2">
+                      ({liveScore.penalty_shootout.participant1_scored}-{liveScore.penalty_shootout.participant2_scored})
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Match Information Card */}
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+            <Flag className="w-6 h-6 text-primary-500" />
+            Match Information
+          </h3>
+          
+          {/* Matchup Display */}
+          <div className="mb-6 p-4 bg-gradient-to-r from-primary-50 to-primary-50 rounded-lg border-2 border-primary-200">
+            <p className="text-sm text-gray-600 mb-2 text-center">Match Between</p>
+            <p className="text-2xl font-bold text-gray-900 text-center">
+              {match.participant1_name} <span className="text-primary-500 mx-3">VS</span> {match.participant2_name}
+            </p>
+          </div>
+          
+          {/* First Row - 4 columns: Tournament, Round/Stage, Format, Date */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Trophy className="w-5 h-5 text-primary-500" />
+              <div>
+                <p className="text-sm text-gray-600">Tournament</p>
+                <p className="font-semibold text-gray-900">{match.tournament_name || 'N/A'}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Flag className="w-5 h-5 text-primary-500" />
+              <div>
+                <p className="text-sm text-gray-600">Round / Stage</p>
+                <p className="font-semibold text-gray-900">{match.round_name || 'N/A'}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Flag className="w-5 h-5 text-primary-500" />
+              <div>
+                <p className="text-sm text-gray-600">Format</p>
+                <p className="font-semibold text-gray-900 capitalize">
+                  {match.tournament_format ? match.tournament_format.replace(/_/g, ' ') : 'N/A'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Calendar className="w-5 h-5 text-primary-500" />
+              <div>
+                <p className="text-sm text-gray-600">Date</p>
+                <p className="font-semibold text-gray-900">{formatDate(match.match_date)}</p>
+              </div>
+            </div>
+          </div>
+          
+          {/* Second Row - 2 columns: Match Duration, Status */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Timer className="w-5 h-5 text-primary-500" />
+              <div>
+                <p className="text-sm text-gray-600">Match Duration</p>
+                <p className="font-semibold text-gray-900">{timingSummary?.total_duration_formatted || timingSummary?.total_duration || '00:00:00'}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Activity className="w-5 h-5 text-primary-500" />
+              <div>
+                <p className="text-sm text-gray-600">Status</p>
+                <p className="font-semibold text-gray-900 capitalize">{match.status}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Score Summary */}
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+            <Award className="w-6 h-6 text-primary-500" />
+            Final Score
+          </h3>
+          
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            {/* Team 1 */}
+            <div className="text-center">
+              <h4 className="font-bold text-lg text-gray-900 mb-2">{match.participant1_name}</h4>
+              <div className="text-5xl font-bold text-primary-500 mb-4">{participant1Score}</div>
+              <p className="text-sm text-gray-500 mb-2">{getScoreLabel()}</p>
+              
+              {/* Football: Show goal scorers */}
+              {sportName === 'Football' && (() => {
+                const goalScorers = {};
+                events.filter(e => e.event_type === 'goal' && e.participant_side === 'participant1').forEach(e => {
+                  const name = e.player_name || 'Unknown';
+                  // Extract minute from score_snapshot.match_time (MM:SS format)
+                  let minute = '1';
+                  if (e.score_snapshot?.match_time) {
+                    const matchTime = e.score_snapshot.match_time.toString();
+                    // Parse MM:SS format and add 1 (0:00-0:59 = min 1, 1:00-1:59 = min 2)
+                    const parts = matchTime.split(':');
+                    if (parts.length >= 2) {
+                      minute = (parseInt(parts[0], 10) + 1).toString();
+                    }
+                  }
+                  if (!goalScorers[name]) goalScorers[name] = [];
+                  goalScorers[name].push(minute);
+                });
+                const scorers = Object.entries(goalScorers).filter(([_, minutes]) => minutes.length > 0);
+                return scorers.length > 0 ? (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-xs font-semibold text-gray-700 mb-2"> Goal Scorers</p>
+                    <div className="space-y-1">
+                      {scorers.map(([name, minutes]) => (
+                        <div key={name} className="text-xs text-gray-600 flex justify-between items-center">
+                          <span>{name}</span>
+                          <span className="font-semibold text-primary-500">{minutes.sort((a, b) => parseInt(a) - parseInt(b)).map(m => m + "'").join('/')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              
+              {/* Football: Show card receivers */}
+              {sportName === 'Football' && (() => {
+                const cardReceivers = {};
+                events.filter(e => (e.event_type === 'yellow_card' || e.event_type === 'red_card') && e.participant_side === 'participant1').forEach(e => {
+                  const name = e.player_name || 'Unknown';
+                  if (!cardReceivers[name]) cardReceivers[name] = { yellow: 0, red: 0 };
+                  if (e.event_type === 'yellow_card') cardReceivers[name].yellow++;
+                  if (e.event_type === 'red_card') cardReceivers[name].red++;
+                });
+                const receivers = Object.entries(cardReceivers).filter(([_, cards]) => cards.yellow > 0 || cards.red > 0);
+                return receivers.length > 0 ? (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-xs font-semibold text-gray-700 mb-2">🟨🟥 Cards</p>
+                    <div className="space-y-1">
+                      {receivers.map(([name, cards]) => (
+                        <div key={name} className="text-xs text-gray-600 flex justify-between items-center">
+                          <span>{name}</span>
+                          <div className="flex gap-2">
+                            {cards.yellow > 0 && <span className="text-yellow-600">🟨 {cards.yellow}</span>}
+                            {cards.red > 0 && <span className="text-red-600">🟥 {cards.red}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              
+              {/* Set-based: Show set scores (handles both set_scores and games arrays) */}
+              {isSetBased && (liveScore?.participant1?.set_scores || liveScore?.participant1?.games) && (
+                <div className="mt-4 space-y-1">
+                  {(liveScore.participant1.set_scores || liveScore.participant1.games).map((score, idx) => (
+                    <div key={idx} className="text-sm text-gray-600">
+                      Set {idx + 1}: <span className="font-semibold">{score}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Game-based: Show game scores */}
+              {isGameBased && liveScore?.participant1?.game_scores && (
+                <div className="mt-4 space-y-1">
+                  {liveScore.participant1.game_scores.map((score, idx) => (
+                    <div key={idx} className="text-sm text-gray-600">
+                      Game {idx + 1}: <span className="font-semibold">{score}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* VS */}
+            <div className="flex items-center justify-center">
+              <div className="text-3xl font-bold text-gray-400">VS</div>
+            </div>
+
+            {/* Team 2 */}
+            <div className="text-center">
+              <h4 className="font-bold text-lg text-gray-900 mb-2">{match.participant2_name}</h4>
+              <div className="text-5xl font-bold text-primary-500 mb-4">{participant2Score}</div>
+              <p className="text-sm text-gray-500 mb-2">{getScoreLabel()}</p>
+              
+              {/* Football: Show goal scorers */}
+              {sportName === 'Football' && (() => {
+                const goalScorers = {};
+                events.filter(e => e.event_type === 'goal' && e.participant_side === 'participant2').forEach(e => {
+                  const name = e.player_name || 'Unknown';
+                  // Extract minute from score_snapshot.match_time (MM:SS format)
+                  let minute = '1';
+                  if (e.score_snapshot?.match_time) {
+                    const matchTime = e.score_snapshot.match_time.toString();
+                    // Parse MM:SS format and add 1 (0:00-0:59 = min 1, 1:00-1:59 = min 2)
+                    const parts = matchTime.split(':');
+                    if (parts.length >= 2) {
+                      minute = (parseInt(parts[0], 10) + 1).toString();
+                    }
+                  }
+                  if (!goalScorers[name]) goalScorers[name] = [];
+                  goalScorers[name].push(minute);
+                });
+                const scorers = Object.entries(goalScorers).filter(([_, minutes]) => minutes.length > 0);
+                return scorers.length > 0 ? (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-xs font-semibold text-gray-700 mb-2"> Goal Scorers</p>
+                    <div className="space-y-1">
+                      {scorers.map(([name, minutes]) => (
+                        <div key={name} className="text-xs text-gray-600 flex justify-between items-center">
+                          <span>{name}</span>
+                          <span className="font-semibold text-primary-500">{minutes.sort((a, b) => parseInt(a) - parseInt(b)).map(m => m + "'").join('/')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              
+              {/* Football: Show card receivers */}
+              {sportName === 'Football' && (() => {
+                const cardReceivers = {};
+                events.filter(e => (e.event_type === 'yellow_card' || e.event_type === 'red_card') && e.participant_side === 'participant2').forEach(e => {
+                  const name = e.player_name || 'Unknown';
+                  if (!cardReceivers[name]) cardReceivers[name] = { yellow: 0, red: 0 };
+                  if (e.event_type === 'yellow_card') cardReceivers[name].yellow++;
+                  if (e.event_type === 'red_card') cardReceivers[name].red++;
+                });
+                const receivers = Object.entries(cardReceivers).filter(([_, cards]) => cards.yellow > 0 || cards.red > 0);
+                return receivers.length > 0 ? (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-xs font-semibold text-gray-700 mb-2">🟨🟥 Cards</p>
+                    <div className="space-y-1">
+                      {receivers.map(([name, cards]) => (
+                        <div key={name} className="text-xs text-gray-600 flex justify-between items-center">
+                          <span>{name}</span>
+                          <div className="flex gap-2">
+                            {cards.yellow > 0 && <span className="text-yellow-600">🟨 {cards.yellow}</span>}
+                            {cards.red > 0 && <span className="text-red-600">🟥 {cards.red}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+              
+              {/* Set-based: Show set scores (handles both set_scores and games arrays) */}
+              {isSetBased && (liveScore?.participant2?.set_scores || liveScore?.participant2?.games) && (
+                <div className="mt-4 space-y-1">
+                  {(liveScore.participant2.set_scores || liveScore.participant2.games).map((score, idx) => (
+                    <div key={idx} className="text-sm text-gray-600">
+                      Set {idx + 1}: <span className="font-semibold">{score}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Game-based: Show game scores */}
+              {isGameBased && liveScore?.participant2?.game_scores && (
+                <div className="mt-4 space-y-1">
+                  {liveScore.participant2.game_scores.map((score, idx) => (
+                    <div key={idx} className="text-sm text-gray-600">
+                      Game {idx + 1}: <span className="font-semibold">{score}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Penalty Shootout Section */}
+          {sportName === 'Football' && liveScore?.penalty_shootout && liveScore.penalty_shootout.kicks && liveScore.penalty_shootout.kicks.length > 0 && (
+            <div className="mt-6 p-6 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-400 rounded-lg">
+              <h4 className="text-xl font-bold text-orange-600 text-center mb-4 flex items-center justify-center gap-2">
+                <Target className="w-6 h-6" />
+                Penalty Shootout
+                {liveScore.penalty_shootout.sudden_death && <span className="text-sm text-red-600">(Sudden Death)</span>}
+              </h4>
+              
+              <div className="text-center mb-4">
+                <p className="text-sm text-gray-600">Regular Time: {liveScore.participant1?.goals || 0} - {liveScore.participant2?.goals || 0}</p>
+                <p className="text-3xl font-bold text-gray-900 mt-2">
+                  {liveScore.penalty_shootout.participant1_scored} - {liveScore.penalty_shootout.participant2_scored}
+                </p>
+                <p className="text-sm text-gray-600 mt-1">Penalty Score</p>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-6">
+                {/* Team 1 Penalties */}
+                <div>
+                  <p className="text-sm font-semibold text-gray-700 mb-3 text-center">
+                    {match.participant1_name}
+                  </p>
+                  <div className="space-y-2">
+                    {liveScore.penalty_shootout.kicks
+                      .filter(kick => kick.participant_side === 'participant1')
+                      .map((kick, index) => (
+                        <div key={index} className="flex items-center justify-between bg-white rounded-lg p-3 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-gray-500">R{kick.round}</span>
+                            <span className="text-sm font-medium text-gray-800">{kick.player_name || 'Player'}</span>
+                          </div>
+                          <span className={`text-2xl font-bold ${kick.result === 'scored' ? 'text-green-500' : 'text-red-500'}`}>
+                            {kick.result === 'scored' ? '✓' : '✗'}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                  <div className="mt-3 text-center">
+                    <p className="text-sm text-gray-600">
+                      {liveScore.penalty_shootout.participant1_scored} / {liveScore.penalty_shootout.participant1_attempts} scored
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Team 2 Penalties */}
+                <div>
+                  <p className="text-sm font-semibold text-gray-700 mb-3 text-center">
+                    {match.participant2_name}
+                  </p>
+                  <div className="space-y-2">
+                    {liveScore.penalty_shootout.kicks
+                      .filter(kick => kick.participant_side === 'participant2')
+                      .map((kick, index) => (
+                        <div key={index} className="flex items-center justify-between bg-white rounded-lg p-3 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-gray-500">R{kick.round}</span>
+                            <span className="text-sm font-medium text-gray-800">{kick.player_name || 'Player'}</span>
+                          </div>
+                          <span className={`text-2xl font-bold ${kick.result === 'scored' ? 'text-green-500' : 'text-red-500'}`}>
+                            {kick.result === 'scored' ? '✓' : '✗'}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                  <div className="mt-3 text-center">
+                    <p className="text-sm text-gray-600">
+                      {liveScore.penalty_shootout.participant2_scored} / {liveScore.penalty_shootout.participant2_attempts} scored
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-4 text-center">
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Winner:</span>{' '}
+                  {liveScore.match_winner === 'participant1' ? match.participant1_name : match.participant2_name}
+                  {' '}on penalties
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Match Timing Section */}
+        {timingSummary && (
+          <div className="bg-white rounded-xl shadow-lg p-6">
+            <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+              <Timer className="w-6 h-6 text-primary-500" />
+              Match Timing Details
+            </h3>
+            
+            {/* Overall Timing */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg">
+                <Timer className="w-6 h-6 text-blue-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Start Time</p>
+                  <p className="font-bold text-gray-900">
+                    {timingSummary.actual_start_time 
+                      ? new Date(timingSummary.actual_start_time.replace(' ', 'T')).toLocaleTimeString('en-US', { 
+                          hour: '2-digit', 
+                          minute: '2-digit',
+                          second: '2-digit',
+                          hour12: true 
+                        })
+                      : 'N/A'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {timingSummary.actual_start_time 
+                      ? new Date(timingSummary.actual_start_time.replace(' ', 'T')).toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric', 
+                          year: 'numeric' 
+                        })
+                      : ''}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-3 p-4 bg-green-50 rounded-lg">
+                <Flag className="w-6 h-6 text-green-600" />
+                <div>
+                  <p className="text-sm text-gray-600">End Time</p>
+                  <p className="font-bold text-gray-900">
+                    {timingSummary.actual_end_time 
+                      ? new Date(timingSummary.actual_end_time.replace(' ', 'T')).toLocaleTimeString('en-US', { 
+                          hour: '2-digit', 
+                          minute: '2-digit',
+                          second: '2-digit',
+                          hour12: true 
+                        })
+                      : 'N/A'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {timingSummary.actual_end_time 
+                      ? new Date(timingSummary.actual_end_time).toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric', 
+                          year: 'numeric' 
+                        })
+                      : ''}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-3 p-4 bg-purple-50 rounded-lg">
+                <Timer className="w-6 h-6 text-purple-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Total Duration</p>
+                  <p className="font-bold text-2xl text-purple-600">
+                    {timingSummary.total_duration_formatted || timingSummary.total_duration || '00:00:00'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {timingSummary.total_duration_minutes 
+                      ? `${Math.floor(timingSummary.total_duration_minutes)} minutes` 
+                      : '0 minutes'}
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            {/* TIME-BASED SPORTS (Football) - Show Half-wise Breakdown */}
+            {isTimeBased && timingSummary.segments && timingSummary.segments.length > 0 && (
+              <div className="mb-6">
+                <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-primary-500" />
+                   Half-wise Time Breakdown
+                </h4>
+                
+                <div className="space-y-3">
+                  {timingSummary.segments.map((segment, index) => {
+                    const isHalf = segment.segment_type === 'half';
+                    const isBreak = segment.segment_type === 'break';
+                    const isExtraTimeHalf = isHalf && (segment.segment_number === 3 || segment.segment_number === 4);
+                    const isExtraTimeBreak = isBreak && segment.segment_number === 2;
+                    
+                    // Determine config duration based on segment type
+                    let configDuration = 0;
+                    if (isExtraTimeHalf) {
+                      // Extra time half - use extra_time_config
+                      configDuration = (liveScore?.extra_time_config?.half_duration || 15) * 60;
+                    } else if (isExtraTimeBreak) {
+                      // Extra time break
+                      configDuration = (liveScore?.extra_time_config?.break_duration || 5) * 60;
+                    } else if (isHalf) {
+                      // Regular half
+                      configDuration = (liveScore?.period_duration || 45) * 60;
+                    } else if (isBreak) {
+                      // Regular break
+                      configDuration = (liveScore?.break_duration || 15) * 60;
+                    }
+                    
+                    const additionalTime = segment.additional_time_seconds || 0;
+                    const totalDuration = segment.duration_seconds || 0;
+                    
+                    return (
+                      <div 
+                        key={index}
+                        className={`p-4 rounded-lg border-2 ${
+                          isHalf ? 'bg-primary-50 border-primary-200' : 'bg-orange-50 border-orange-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                              isHalf ? 'bg-primary-200' : 'bg-orange-200'
+                            }`}>
+                              <span className={`font-bold ${
+                                isHalf ? 'text-primary-600' : 'text-orange-700'
+                              }`}>
+                                {isHalf ? `H${segment.segment_number}` : '⏸'}
+                              </span>
+                            </div>
+                            <div>
+                              <p className="font-bold text-lg text-gray-900 capitalize">
+                                {isHalf ? (
+                                  segment.segment_number === 1 ? 'First Half' :
+                                  segment.segment_number === 2 ? 'Second Half' :
+                                  segment.segment_number === 3 ? '⏱️ Extra Time 1st Half' :
+                                  segment.segment_number === 4 ? '⏱️ Extra Time 2nd Half' :
+                                  `Half ${segment.segment_number}`
+                                ) : (
+                                  segment.segment_number === 2 ? '⏸️ Extra Time Break' : 'Half-Time Break'
+                                )}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {segment.start_time 
+                                  ? new Date(segment.start_time).toLocaleTimeString('en-US', { 
+                                      hour: '2-digit', 
+                                      minute: '2-digit',
+                                      second: '2-digit',
+                                      hour12: true 
+                                    })
+                                  : 'N/A'} 
+                                {' → '}
+                                {segment.end_time 
+                                  ? new Date(segment.end_time).toLocaleTimeString('en-US', { 
+                                      hour: '2-digit', 
+                                      minute: '2-digit',
+                                      second: '2-digit',
+                                      hour12: true 
+                                    })
+                                  : 'N/A'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className={`font-bold text-2xl ${
+                              isHalf ? 'text-primary-500' : 'text-orange-600'
+                            }`}>
+                              {segment.duration_formatted || '00:00:00'}
+                            </p>
+                            <p className="text-xs text-gray-500">Total Duration</p>
+                          </div>
+                        </div>
+                        
+                        {/* Time Breakdown: Config + Additional */}
+                        <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-gray-200">
+                          <div className="text-center p-2 bg-white rounded">
+                            <p className="text-xs text-gray-600 mb-1">Config Time</p>
+                            <p className="font-bold text-gray-900">
+                              {Math.floor(configDuration / 60)}m {configDuration % 60}s
+                            </p>
+                            <p className="text-xs text-gray-500">{configDuration}s</p>
+                          </div>
+                          <div className="text-center p-2 bg-white rounded">
+                            <p className="text-xs text-gray-600 mb-1">Additional Time</p>
+                            <p className={`font-bold ${
+                              additionalTime > 0 ? 'text-red-600' : 'text-gray-400'
+                            }`}>
+                              +{Math.floor(additionalTime / 60)}m {additionalTime % 60}s
+                            </p>
+                            <p className="text-xs text-gray-500">{additionalTime}s</p>
+                          </div>
+                          <div className="text-center p-2 bg-white rounded">
+                            <p className="text-xs text-gray-600 mb-1">Actual Duration</p>
+                            <p className="font-bold text-blue-600">
+                              {Math.floor(totalDuration / 60)}m {totalDuration % 60}s
+                            </p>
+                            <p className="text-xs text-gray-500">{totalDuration}s</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            
+            {/* SET-BASED SPORTS - Show Set-wise Breakdown */}
+            {isSetBased && (liveScore?.participant1?.games || (timingSummary.segments && timingSummary.segments.length > 0)) && (
+              <div className="mb-6">
+                <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-primary-500" />
+                   Set-wise Time Breakdown
+                </h4>
+                
+                <div className="space-y-3">
+                  {(() => {
+                    // For Tennis/Padel - use games array with set timings
+                    if (liveScore?.participant1?.games) {
+                      return liveScore.participant1.games.map((gamesWon, setIndex) => {
+                        const participant2Games = liveScore.participant2?.games?.[setIndex] || 0;
+                        
+                        // Get set timing if available
+                        const setTiming = liveScore.set_timings?.[setIndex];
+                        const hasTiming = setTiming && setTiming.duration_seconds !== null;
+                        
+                        // Format duration
+                        const formatDuration = (seconds) => {
+                          if (!seconds) return 'N/A';
+                          const h = Math.floor(seconds / 3600);
+                          const m = Math.floor((seconds % 3600) / 60);
+                          const s = seconds % 60;
+                          if (h > 0) {
+                            return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+                          }
+                          return `${m}:${String(s).padStart(2, '0')}`;
+                        };
+                        
+                        return (
+                          <div 
+                            key={setIndex}
+                            className="p-4 rounded-lg border-2 bg-blue-50 border-blue-200"
+                          >
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-blue-200 rounded-full flex items-center justify-center">
+                                  <span className="font-bold text-blue-700">S{setIndex + 1}</span>
+                                </div>
+                                <div>
+                                  <p className="font-bold text-lg text-gray-900">
+                                    Set {setIndex + 1}
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    Score: <span className="font-semibold">{gamesWon} - {participant2Games}</span>
+                                  </p>
+                                  {hasTiming && setTiming.start_time && (
+                                    <p className="text-xs text-gray-500">
+                                      {new Date(setTiming.start_time).toLocaleTimeString('en-US', { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit',
+                                        hour12: true 
+                                      })}
+                                      {setTiming.end_time && ` - ${new Date(setTiming.end_time).toLocaleTimeString('en-US', { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit',
+                                        hour12: true 
+                                      })}`}
+                                    </p>
+                                  )}
+                                  {!hasTiming && (
+                                    <p className="text-xs text-gray-500">
+                                      {setIndex === liveScore.current_set - 1 ? 'In Progress' : 'Duration not tracked'}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-2xl font-bold text-blue-600">
+                                  {hasTiming ? formatDuration(setTiming.duration_seconds) : 'N/A'}
+                                </p>
+                                <p className="text-xs text-gray-500">Duration</p>
+                                {hasTiming && setTiming.duration_seconds && (
+                                  <p className="text-xs text-gray-500">
+                                    {Math.floor(setTiming.duration_seconds / 60)} min
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      });
+                    }
+                    
+                    // For other sports - use segment timings (both 'set' and 'game' types)
+                    return timingSummary.segments
+                      .filter(seg => (seg.segment_type === 'set' || seg.segment_type === 'game') && seg.status === 'completed')
+                      .map((segment, index) => {
+                        const totalDuration = segment.duration_seconds || 0;
+                        // Use segment_number - 1 as array index (segment numbers start from 1)
+                        const segmentIndex = segment.segment_number - 1;
+                        const isGameBased = segment.segment_type === 'game';
+                        
+                        // Try to get scores from liveScore first
+                        let set1Score = isGameBased 
+                          ? liveScore?.participant1?.games?.[segmentIndex]
+                          : liveScore?.participant1?.set_scores?.[segmentIndex];
+                        let set2Score = isGameBased
+                          ? liveScore?.participant2?.games?.[segmentIndex]
+                          : liveScore?.participant2?.set_scores?.[segmentIndex];
+                        
+                        // If not available, try to find from events
+                        if ((set1Score === undefined || set1Score === null) && events && events.length > 0) {
+                          // Find the last event for this segment number
+                          const segmentEvents = isGameBased
+                            ? events.filter(e => e.current_game === segment.segment_number)
+                            : events.filter(e => e.current_set === segment.segment_number);
+                          if (segmentEvents.length > 0) {
+                            const lastEvent = segmentEvents[0]; // Events are sorted by latest first
+                            if (isGameBased) {
+                              set1Score = lastEvent.score_snapshot?.participant1?.games?.[segmentIndex] || 0;
+                              set2Score = lastEvent.score_snapshot?.participant2?.games?.[segmentIndex] || 0;
+                            } else {
+                              set1Score = lastEvent.score_snapshot?.participant1?.set_scores?.[segmentIndex] || 0;
+                              set2Score = lastEvent.score_snapshot?.participant2?.set_scores?.[segmentIndex] || 0;
+                            }
+                          }
+                        }
+                        
+                        // Default to 0 if still not found
+                        set1Score = set1Score ?? 0;
+                        set2Score = set2Score ?? 0;
+                        
+                        const segmentLabel = isGameBased ? 'Game' : 'Set';
+                        const segmentInitial = isGameBased ? 'G' : 'S';
+                      
+                      return (
+                        <div 
+                          key={index}
+                          className="p-4 rounded-lg border-2 bg-blue-50 border-blue-200"
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 bg-blue-200 rounded-full flex items-center justify-center">
+                                <span className="font-bold text-blue-700">{segmentInitial}{segment.segment_number}</span>
+                              </div>
+                              <div>
+                                <p className="font-bold text-lg text-gray-900">
+                                  {segmentLabel} {segment.segment_number}
+                                </p>
+                                <p className="text-sm text-gray-600">
+                                  Score: <span className="font-semibold">{set1Score} - {set2Score}</span>
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {segment.start_time 
+                                    ? new Date(segment.start_time.replace(' ', 'T')).toLocaleTimeString('en-US', { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit',
+                                        second: '2-digit',
+                                        hour12: true 
+                                      })
+                                    : 'N/A'} 
+                                  {' → '}
+                                  {segment.end_time 
+                                    ? new Date(segment.end_time.replace(' ', 'T')).toLocaleTimeString('en-US', { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit',
+                                        second: '2-digit',
+                                        hour12: true 
+                                      })
+                                    : 'N/A'}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-bold text-2xl text-blue-600">
+                                {segment.duration_formatted || '00:00:00'}
+                              </p>
+                              <p className="text-xs text-gray-500">Duration</p>
+                              <p className="text-sm font-semibold text-gray-700 mt-1">
+                                {totalDuration >= 60 
+                                  ? `${Math.floor(totalDuration / 60)}m ${totalDuration % 60}s`
+                                  : `${totalDuration}s`
+                                }
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            )}
+            
+            {/* GAME-BASED SPORTS - Show Game-wise Breakdown */}
+            {isGameBased && timingSummary.segments && timingSummary.segments.length > 0 && (
+              <div className="mb-6">
+                <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-primary-500" />
+                   Game-wise Time Breakdown
+                </h4>
+                
+                <div className="space-y-3">
+                  {timingSummary.segments
+                    .filter(seg => seg.segment_type === 'game')
+                    .map((segment, index) => {
+                      const totalDuration = segment.duration_seconds || 0;
+                      // Use segment_number - 1 as array index (segment numbers start from 1)
+                      const gameIndex = segment.segment_number - 1;
+                      
+                      // Try to get scores from liveScore first
+                      let game1Score = liveScore?.participant1?.game_scores?.[gameIndex];
+                      let game2Score = liveScore?.participant2?.game_scores?.[gameIndex];
+                      
+                      // If not available, try to find from events for this game
+                      if ((game1Score === undefined || game1Score === null) && events && events.length > 0) {
+                        // Find the last event for this game number
+                        const gameEvents = events.filter(e => e.current_game === segment.segment_number);
+                        if (gameEvents.length > 0) {
+                          const lastEvent = gameEvents[0]; // Events are sorted by latest first
+                          game1Score = lastEvent.score_snapshot?.participant1?.game_scores?.[gameIndex] || 0;
+                          game2Score = lastEvent.score_snapshot?.participant2?.game_scores?.[gameIndex] || 0;
+                        }
+                      }
+                      
+                      // Default to 0 if still not found
+                      game1Score = game1Score ?? 0;
+                      game2Score = game2Score ?? 0;
+                      
+                      // console.log(`\n🎯 Game ${segment.segment_number} Score Lookup:`, {
+                      //   segment_number: segment.segment_number,
+                      //   gameIndex,
+                      //   game1Score,
+                      //   game2Score,
+                      //   'liveScore.participant1.game_scores': liveScore?.participant1?.game_scores,
+                      //   'liveScore.participant2.game_scores': liveScore?.participant2?.game_scores,
+                      //   'Found from events': (game1Score !== 0 || game2Score !== 0) && !liveScore?.participant1?.game_scores?.[gameIndex]
+                      // });
+                      
+                      return (
+                        <div 
+                          key={index}
+                          className="p-4 rounded-lg border-2 bg-purple-50 border-purple-200"
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 bg-purple-200 rounded-full flex items-center justify-center">
+                                <span className="font-bold text-purple-700">G{segment.segment_number}</span>
+                              </div>
+                              <div>
+                                <p className="font-bold text-lg text-gray-900">
+                                  Game {segment.segment_number}
+                                </p>
+                                <p className="text-sm text-gray-600">
+                                  Score: <span className="font-semibold">{game1Score} - {game2Score}</span>
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {segment.start_time 
+                                    ? new Date(segment.start_time).toLocaleTimeString('en-US', { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit',
+                                        hour12: true 
+                                      })
+                                    : 'N/A'} 
+                                  {' → '}
+                                  {segment.end_time 
+                                    ? new Date(segment.end_time).toLocaleTimeString('en-US', { 
+                                        hour: '2-digit', 
+                                        minute: '2-digit',
+                                        hour12: true 
+                                      })
+                                    : 'N/A'}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-bold text-2xl text-purple-600">
+                                {segment.duration_formatted || '00:00:00'}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {Math.floor(totalDuration / 60)}m {totalDuration % 60}s
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+            
+            {/* Summary Statistics */}
+            
+          </div>
+        )}
+
+        {/* Statistics Summary */}
+        {/* <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+            <Activity className="w-6 h-6 text-primary-500" />
+            Match Statistics
+          </h3>
+          
+          
+          {sportName === 'Football' && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="text-center p-4 bg-gradient-to-br from-green-50 to-green-100 rounded-lg">
+                <Target className="w-8 h-8 text-green-600 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{participant1Score + participant2Score}</p>
+                <p className="text-sm text-gray-600">Total Goals</p>
+              </div>
+              <div className="text-center p-4 bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-lg">
+                <AlertCircle className="w-8 h-8 text-yellow-600 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{participant1YellowCards + participant2YellowCards}</p>
+                <p className="text-sm text-gray-600">Yellow Cards</p>
+              </div>
+              <div className="text-center p-4 bg-gradient-to-br from-red-50 to-red-100 rounded-lg">
+                <AlertCircle className="w-8 h-8 text-red-600 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{participant1RedCards + participant2RedCards}</p>
+                <p className="text-sm text-gray-600">Red Cards</p>
+              </div>
+            </div>
+          )}
+          
+          
+          {isSetBased && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="text-center p-4 bg-gradient-to-br from-primary-50 to-primary-100 rounded-lg">
+                <Award className="w-8 h-8 text-primary-500 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{participant1Score + participant2Score}</p>
+                <p className="text-sm text-gray-600">Total Sets Played</p>
+              </div>
+              <div className="text-center p-4 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg">
+                <Timer className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{timingSummary.total_duration_formatted || timingSummary.total_duration || '00:00:00'}</p>
+                <p className="text-sm text-gray-600">Match Duration</p>
+              </div>
+            </div>
+          )}
+          
+          
+          {isGameBased && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="text-center p-4 bg-gradient-to-br from-primary-50 to-primary-100 rounded-lg">
+                <Award className="w-8 h-8 text-primary-500 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{participant1Score + participant2Score}</p>
+                <p className="text-sm text-gray-600">Total Games Played</p>
+              </div>
+              <div className="text-center p-4 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg">
+                <Timer className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+                <p className="text-2xl font-bold text-gray-900">{timingSummary.total_duration_formatted || timingSummary.total_duration || '00:00:00'} </p>
+                <p className="text-sm text-gray-600">Match Duration</p>
+              </div>
+            </div>
+          )}
+        </div> */}
+
+        {/* Action Buttons */}
+        <div className="flex gap-4">
+          <button
+            onClick={() => {
+              if (sourceParam === 'tournament' && tournamentIdParam) {
+                navigate(`/tournaments/${tournamentIdParam}?tab=matches`);
+              } else {
+                navigate(`/matches?tab=${tabParam}`);
+              }
+            }}
+            className="flex-1 py-3 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition-all"
+          >
+            {sourceParam === 'tournament' ? 'Back to Tournament' : 'Back to Matches'}
+          </button>
+          {/* <button
+            onClick={() => navigate(`/matches/${matchId}/live`)}
+            className="flex-1 py-3 bg-primary-500 text-white font-semibold rounded-lg hover:bg-primary-600 transition-all"
+          >
+            View Live Page
+          </button> */}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MatchScoreHistory;

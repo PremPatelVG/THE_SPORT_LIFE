@@ -1,0 +1,231 @@
+import { useState, useEffect } from 'react';
+import { X, Search, User, Users, Loader } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { getAvailableParticipants, updateMatchParticipants } from '../services/matchService';
+
+const UpdateParticipantModal = ({ 
+  isOpen, 
+  onClose, 
+  match, 
+  participantSlot, // 'participant1' or 'participant2'
+  onSuccess 
+}) => {
+  const [loading, setLoading] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [availableParticipants, setAvailableParticipants] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedParticipant, setSelectedParticipant] = useState(null);
+  const [category, setCategory] = useState('singles');
+
+  useEffect(() => {
+    if (isOpen && match) {
+      fetchAvailableParticipants();
+    }
+  }, [isOpen, match]);
+
+  const fetchAvailableParticipants = async () => {
+    try {
+      setLoading(true);
+      const data = await getAvailableParticipants(match.id);
+      setAvailableParticipants(data.available_participants || []);
+      setCategory(data.category);
+    } catch (error) {
+      console.error('Failed to fetch available participants:', error);
+      toast.error(error.response?.data?.error || 'Failed to load participants');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateParticipant = async () => {
+    if (!selectedParticipant) {
+      toast.error('Please select a participant');
+      return;
+    }
+
+    try {
+      setUpdating(true);
+      
+      const updateData = {};
+      if (participantSlot === 'participant1') {
+        updateData.participant1_id = selectedParticipant.participant_id;
+      } else {
+        updateData.participant2_id = selectedParticipant.participant_id;
+      }
+
+      await updateMatchParticipants(match.id, updateData);
+      toast.success('Participant updated successfully');
+      onSuccess();
+      onClose();
+    } catch (error) {
+      console.error('Failed to update participant:', error);
+      toast.error(error.response?.data?.error || 'Failed to update participant');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const filteredParticipants = availableParticipants.filter(participant => {
+    const searchLower = searchQuery.toLowerCase();
+    
+    if (category === 'singles') {
+      return participant.name?.toLowerCase().includes(searchLower);
+    } else if (category === 'doubles' || category === 'pairs') {
+      return (
+        participant.name?.toLowerCase().includes(searchLower) ||
+        participant.player1_name?.toLowerCase().includes(searchLower) ||
+        participant.player2_name?.toLowerCase().includes(searchLower)
+      );
+    }
+    return true;
+  });
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">
+              Update {participantSlot === 'participant1' ? 'Participant 1' : 'Participant 2'}
+            </h2>
+            <p className="text-sm text-gray-600 mt-1">
+              Select a locked participant to replace the current one
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-6 h-6 text-gray-600" />
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="p-6 border-b border-gray-200">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search participants..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        {/* Participants List */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="text-center">
+                <Loader className="w-8 h-8 text-primary-500 animate-spin mx-auto mb-2" />
+                <p className="text-gray-600">Loading participants...</p>
+              </div>
+            </div>
+          ) : filteredParticipants.length === 0 ? (
+            <div className="text-center py-12">
+              <User className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-600">
+                {searchQuery ? 'No participants found matching your search' : 'No locked participants available'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredParticipants.map((participant) => (
+                <div
+                  key={participant.participant_id}
+                  onClick={() => setSelectedParticipant(participant)}
+                  className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                    selectedParticipant?.participant_id === participant.participant_id
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-gray-200 hover:border-primary-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    {/* Icon */}
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                      selectedParticipant?.participant_id === participant.participant_id
+                        ? 'bg-primary-100'
+                        : 'bg-gray-100'
+                    }`}>
+                      {category === 'doubles' || category === 'pairs' ? (
+                        <Users className={`w-5 h-5 ${
+                          selectedParticipant?.participant_id === participant.participant_id
+                            ? 'text-primary-500'
+                            : 'text-gray-600'
+                        }`} />
+                      ) : (
+                        <User className={`w-5 h-5 ${
+                          selectedParticipant?.participant_id === participant.participant_id
+                            ? 'text-primary-500'
+                            : 'text-gray-600'
+                        }`} />
+                      )}
+                    </div>
+
+                    {/* Participant Info */}
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900">
+                        {participant.name}
+                      </h3>
+                      {(category === 'doubles' || category === 'pairs') && (
+                        <p className="text-sm text-gray-600">
+                          {participant.player1_name} & {participant.player2_name}
+                        </p>
+                      )}
+                      {category === 'singles' && participant.skill_level && (
+                        <p className="text-sm text-gray-600">
+                          Skill: {participant.skill_level}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Selected Indicator */}
+                    {selectedParticipant?.participant_id === participant.participant_id && (
+                      <div className="w-6 h-6 bg-primary-500 rounded-full flex items-center justify-center">
+                        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200">
+          <button
+            onClick={onClose}
+            disabled={updating}
+            className="px-6 py-2.5 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleUpdateParticipant}
+            disabled={!selectedParticipant || updating}
+            className="px-6 py-2.5 bg-primary-500 text-white font-semibold rounded-lg hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {updating ? (
+              <>
+                <Loader className="w-4 h-4 animate-spin" />
+                Updating...
+              </>
+            ) : (
+              'Update Participant'
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default UpdateParticipantModal;

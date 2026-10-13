@@ -1,0 +1,560 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Calendar,
+  MapPin,
+  Clock,
+  Search,
+  Loader,
+  AlertCircle,
+  Eye,
+  Trophy,
+  CheckCircle,
+  PlayCircle,
+  XCircle,
+  Link as LinkIcon,
+  Youtube,
+  Filter,
+  X,
+  Copy,
+  ExternalLink,
+  User
+} from 'lucide-react';
+import adminApi from '../../config/adminApi';
+import api from '../../config/api';
+import toast from 'react-hot-toast';
+
+const AdminMatches = () => {
+  const navigate = useNavigate();
+  const [matches, setMatches] = useState([]);
+  const [sports, setSports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selectedMatch, setSelectedMatch] = useState(null);
+  const [showLiveLinkModal, setShowLiveLinkModal] = useState(false);
+  const [liveLink, setLiveLink] = useState('');
+  const [savingLink, setSavingLink] = useState(false);
+  
+  const [filters, setFilters] = useState({
+    sport_id: '',
+    status: '',
+    date_from: '',
+    date_to: '',
+    search: ''
+  });
+
+  useEffect(() => {
+    fetchSports();
+    fetchMatches();
+  }, [filters]);
+
+  const fetchSports = async () => {
+    try {
+      const response = await api.get('/sports');
+      setSports(response.data.data || []);
+    } catch (err) {
+      console.error('Failed to fetch sports:', err);
+    }
+  };
+
+  const fetchMatches = async () => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (filters.sport_id) params.append('sport_id', filters.sport_id);
+      if (filters.status) params.append('status', filters.status);
+      if (filters.date_from) params.append('date_from', filters.date_from);
+      if (filters.date_to) params.append('date_to', filters.date_to);
+      if (filters.search) params.append('search', filters.search);
+
+      const response = await adminApi.get(`/matches?${params.toString()}`);
+      setMatches(response.data.data || []);
+    } catch (err) {
+      console.error('Failed to fetch matches:', err);
+      setError('Failed to load matches');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearch = (e) => {
+    setFilters({ ...filters, search: e.target.value });
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      sport_id: '',
+      status: '',
+      date_from: '',
+      date_to: '',
+      search: ''
+    });
+  };
+
+  const hasActiveFilters = filters.sport_id || filters.status || filters.date_from || filters.date_to || filters.search;
+
+  const openLiveLinkModal = (match) => {
+    setSelectedMatch(match);
+    setLiveLink(match.match_live_link || '');
+    setShowLiveLinkModal(true);
+  };
+
+  const closeLiveLinkModal = () => {
+    setShowLiveLinkModal(false);
+    setSelectedMatch(null);
+    setLiveLink('');
+  };
+
+  const handleSaveLiveLink = async () => {
+    if (!selectedMatch) return;
+
+    // Validate YouTube link
+    if (liveLink && !liveLink.includes('youtube.com') && !liveLink.includes('youtu.be')) {
+      toast.error('Please provide a valid YouTube link');
+      return;
+    }
+
+    try {
+      setSavingLink(true);
+      await adminApi.put(`/matches/${selectedMatch.id}/live-link`, {
+        live_link: liveLink
+      });
+
+      toast.success('Live link updated successfully');
+      closeLiveLinkModal();
+      fetchMatches(); // Refresh matches
+    } catch (err) {
+      console.error('Failed to update live link:', err);
+      toast.error(err.response?.data?.error || 'Failed to update live link');
+    } finally {
+      setSavingLink(false);
+    }
+  };
+
+  const generateLiveUrl = (matchId) => {
+    const frontendUrl = import.meta.env.VITE_FRONTEND_URL || window.location.origin;
+    return `${frontendUrl}/matches/${matchId}/live`;
+  };
+
+  const copyLiveUrl = (matchId) => {
+    const liveUrl = generateLiveUrl(matchId);
+    navigator.clipboard.writeText(liveUrl).then(() => {
+      toast.success('Live URL copied to clipboard!');
+    }).catch(() => {
+      toast.error('Failed to copy URL');
+    });
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  const formatTime = (timeString) => {
+    if (!timeString) return 'N/A';
+    return new Date(`2000-01-01T${timeString}`).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusBadge = (status) => {
+    const badges = {
+      pending: { bg: 'bg-gray-100', text: 'text-gray-700', icon: Clock, label: 'Pending' },
+      scheduled: { bg: 'bg-blue-100', text: 'text-blue-700', icon: Calendar, label: 'Scheduled' },
+      ready: { bg: 'bg-cyan-100', text: 'text-cyan-700', icon: CheckCircle, label: 'Ready' },
+      in_progress: { bg: 'bg-green-100', text: 'text-green-700', icon: PlayCircle, label: 'In Progress' },
+      completed: { bg: 'bg-purple-100', text: 'text-purple-700', icon: CheckCircle, label: 'Completed' },
+      cancelled: { bg: 'bg-red-100', text: 'text-red-700', icon: XCircle, label: 'Cancelled' },
+      postponed: { bg: 'bg-orange-100', text: 'text-orange-700', icon: Clock, label: 'Postponed' },
+      walkover: { bg: 'bg-yellow-100', text: 'text-yellow-700', icon: Trophy, label: 'Walkover' }
+    };
+    const badge = badges[status] || badges.pending;
+    const Icon = badge.icon;
+    
+    return (
+      <span className={`flex items-center gap-1 px-3 py-1 ${badge.bg} ${badge.text} text-xs font-semibold rounded-full`}>
+        <Icon className="w-3 h-3" />
+        {badge.label}
+      </span>
+    );
+  };
+
+  if (loading && matches.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader className="w-8 h-8 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
+
+  if (error && matches.length === 0) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-6 flex items-start gap-3">
+        <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+        <div>
+          <h3 className="font-semibold text-red-900">Error</h3>
+          <p className="text-red-700">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header & Filters */}
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Trophy className="w-7 h-7 text-emerald-600" />
+              All Matches
+            </h2>
+            <p className="text-gray-600 mt-1">{matches.length} match(es) found</p>
+          </div>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+            >
+              <X className="w-4 h-4" />
+              Clear Filters
+            </button>
+          )}
+        </div>
+
+        {/* Filters - Single Row with Labels */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+          {/* Search */}
+          <div className="lg:col-span-1">
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Search
+            </label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search tournament or participants..."
+                value={filters.search}
+                onChange={handleSearch}
+                className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Sport Filter */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Sport
+            </label>
+            <select
+              value={filters.sport_id}
+              onChange={(e) => setFilters({ ...filters, sport_id: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
+            >
+              <option value="">All Sports</option>
+              {sports.map((sport) => (
+                <option key={sport.id} value={sport.id}>
+                  {sport.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Status Filter */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Status
+            </label>
+            <select
+              value={filters.status}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-white"
+            >
+              <option value="">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="ready">Ready</option>
+              <option value="in_progress">In Progress</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="postponed">Postponed</option>
+              <option value="walkover">Walkover</option>
+            </select>
+          </div>
+
+          {/* Start Date */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              Start Date
+            </label>
+            <input
+              type="date"
+              value={filters.date_from}
+              onChange={(e) => setFilters({ ...filters, date_from: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+            />
+          </div>
+
+          {/* End Date */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2">
+              End Date
+            </label>
+            <input
+              type="date"
+              value={filters.date_to}
+              onChange={(e) => setFilters({ ...filters, date_to: e.target.value })}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Matches Grid */}
+      {matches.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm p-12 text-center">
+          <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-xl font-bold text-gray-900 mb-2">No Matches Found</h3>
+          <p className="text-gray-600">Try adjusting your filters</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {matches.map((match) => (
+            <div
+              key={match.id}
+              className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden hover:shadow-xl transition-all duration-300 hover:-translate-y-1"
+            >
+              {/* Tournament Header with Gradient */}
+              <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-4 text-white">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2 flex-1">
+                    <Trophy className="w-5 h-5 flex-shrink-0" />
+                    <h3 className="font-bold text-base line-clamp-2">{match.tournament_name}</h3>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-emerald-100">
+                  <span>{match.sport_name}</span>
+                  <span>•</span>
+                  <span className="capitalize">{match.tournament_category}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-xs font-medium bg-white/20 px-2 py-1 rounded">
+                    Match #{match.match_number} • Round {match.round_number}
+                  </span>
+                  {getStatusBadge(match.status)}
+                </div>
+              </div>
+
+              {/* Card Body */}
+              <div className="p-4">
+                {/* Playing Between - Modern Side-by-Side */}
+                <div className="mb-4 p-4 bg-gradient-to-br from-emerald-700 to-teal-700 rounded-lg shadow-md">
+                  <p className="text-xs font-bold text-white uppercase tracking-wider mb-3 text-center">
+                    Playing Between
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 bg-emerald-900/40 backdrop-blur-sm rounded-lg border border-emerald-500/30 p-3 text-center">
+                      <p className="font-bold text-white text-sm truncate">
+                        {match.participant1_name || 'TBD'}
+                      </p>
+                    </div>
+                    <div className="flex-shrink-0">
+                      <span className="inline-block px-3 py-2 bg-white text-emerald-700 text-xs font-bold rounded-lg shadow-md">
+                        VS
+                      </span>
+                    </div>
+                    <div className="flex-1 bg-emerald-900/40 backdrop-blur-sm rounded-lg border border-emerald-500/30 p-3 text-center">
+                      <p className="font-bold text-white text-sm truncate">
+                        {match.participant2_name || 'TBD'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Match Details */}
+                <div className="space-y-2 mb-4">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Calendar className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-500">Date</p>
+                      <p className="font-medium text-gray-900 text-xs truncate">{formatDate(match.match_date)}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm">
+                    <Clock className="w-4 h-4 text-teal-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-500">Time</p>
+                      <p className="font-medium text-gray-900 text-xs">{formatTime(match.match_time)}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm">
+                    <MapPin className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-500">Venue</p>
+                      <p className="font-medium text-gray-900 text-xs truncate">
+                        {match.venue_name || 'TBD'}
+                        {match.court_name && ` - ${match.court_name}`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm">
+                    <Youtube className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-500">YouTube Link</p>
+                      <p className="font-medium text-xs">
+                        {match.match_live_link ? (
+                          <a
+                            href={match.match_live_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline truncate block"
+                          >
+                            View Stream
+                          </a>
+                        ) : (
+                          <span className="text-gray-400">Not Set</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm">
+                    <User className="w-4 h-4 text-purple-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-500">Referee</p>
+                      <p className="font-medium text-gray-900 text-xs truncate">
+                        {match.referee_first_name && match.referee_last_name
+                          ? `${match.referee_first_name} ${match.referee_last_name}`
+                          : <span className="text-gray-400">Not Assigned</span>
+                        }
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live URL Section */}
+                <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ExternalLink className="w-4 h-4 text-gray-600" />
+                    <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                      Live Match URL
+                    </p>
+                  </div>
+                  <div className="flex items-stretch gap-2">
+                    <div className="flex-1 bg-white rounded-lg border border-gray-300 px-3 py-2.5 flex items-center">
+                      <input
+                        type="text"
+                        value={generateLiveUrl(match.id)}
+                        readOnly
+                        className="w-full bg-transparent text-xs text-gray-700 font-mono outline-none select-all"
+                      />
+                    </div>
+                    <button
+                      onClick={() => copyLiveUrl(match.id)}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg hover:from-emerald-700 hover:to-teal-700 transition-all duration-200 shadow-md hover:shadow-lg font-semibold text-xs whitespace-nowrap"
+                      title="Copy Live URL"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Copy
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-2 flex items-center gap-1">
+                    <span className="inline-block w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                    Share this URL to view live match updates
+                  </p>
+                </div>
+
+                {/* Action Button */}
+                <button
+                  onClick={() => openLiveLinkModal(match)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-lg hover:from-red-700 hover:to-red-800 transition-all duration-200 shadow-md hover:shadow-lg font-medium text-sm"
+                >
+                  <LinkIcon className="w-4 h-4" />
+                  {match.match_live_link ? 'Edit YouTube Link' : 'Add YouTube Link'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Live Link Modal */}
+      {showLiveLinkModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-gray-900">
+                {selectedMatch?.match_live_link ? 'Edit' : 'Add'} Live Link
+              </h3>
+              <button
+                onClick={closeLiveLinkModal}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 mb-4">
+                Match: <span className="font-medium text-gray-900">{selectedMatch?.tournament_name}</span>
+              </p>
+              <p className="text-sm text-gray-600 mb-4">
+                {selectedMatch?.participant1_name || 'TBD'} vs {selectedMatch?.participant2_name || 'TBD'}
+              </p>
+
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                YouTube Live Link
+              </label>
+              <div className="relative">
+                <Youtube className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-red-600" />
+                <input
+                  type="url"
+                  value={liveLink}
+                  onChange={(e) => setLiveLink(e.target.value)}
+                  placeholder="https://youtube.com/watch?v=..."
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Enter a valid YouTube link for the live stream
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={closeLiveLinkModal}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveLiveLink}
+                disabled={savingLink}
+                className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingLink ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Saving...
+                  </span>
+                ) : (
+                  'Save Link'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AdminMatches;

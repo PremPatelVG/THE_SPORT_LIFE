@@ -1,0 +1,360 @@
+import { useState, useEffect } from 'react';
+import { X, Search, User, Star, Award, CheckCircle, Loader, Users, Clock, XCircle } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { getAvailableReferees, assignReferee, getPendingRequestsForMatch } from '../services/refereeService';
+import { getImageUrl } from '../utils/imageUtils';
+import { formatDate } from '../utils/dateFormatter';
+
+const RefereeAssignmentModal = ({ match, tournament, onClose, onSuccess }) => {
+
+  
+  const [referees, setReferees] = useState([]);
+  const [filteredReferees, setFilteredReferees] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [assigning, setAssigning] = useState(null);
+  const [pendingRequests, setPendingRequests] = useState([]);
+
+  useEffect(() => {
+    fetchReferees();
+    fetchPendingRequests();
+  }, [tournament?.id, match?.id]);
+
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      const filtered = referees.filter(ref =>
+        `${ref.first_name} ${ref.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ref.email?.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      setFilteredReferees(filtered);
+    } else {
+      setFilteredReferees(referees);
+    }
+  }, [searchQuery, referees]);
+
+  const fetchReferees = async () => {
+    try {
+      setLoading(true);
+      const data = await getAvailableReferees(tournament?.id);
+      setReferees(data || []);
+      setFilteredReferees(data || []);
+    } catch (error) {
+      console.error('Failed to fetch referees:', error);
+      toast.error('Failed to load referees');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchPendingRequests = async () => {
+    if (!match?.id) return;
+    try {
+      const data = await getPendingRequestsForMatch(match.id);
+      setPendingRequests(data || []);
+    } catch (error) {
+      console.error('Failed to fetch pending requests:', error);
+    }
+  };
+
+  const handleAssign = async (refereeId) => {
+    try {
+      setAssigning(refereeId);
+      await assignReferee(match.id, refereeId);
+      toast.success('Referee assignment request sent!');
+      fetchPendingRequests(); // Refresh pending requests
+      if (onSuccess) onSuccess();
+      onClose();
+    } catch (error) {
+      console.error('Failed to assign referee:', error);
+      toast.error(error.response?.data?.error || 'Failed to assign referee');
+    } finally {
+      setAssigning(null);
+    }
+  };
+
+  const getUserInitials = (firstName, lastName) => {
+    return `${firstName?.[0] || ''}${lastName?.[0] || ''}`.toUpperCase();
+  };
+
+  // Get referee invitation status for this match
+  const getRefereeInvitationStatus = (refereeId) => {
+    const request = pendingRequests.find(req => req.referee_id === refereeId);
+    return request ? request.status : null;
+  };
+
+  // Check if a referee has a pending invitation for this match
+  const hasPendingInvitation = (refereeId) => {
+    return getRefereeInvitationStatus(refereeId) === 'pending';
+  };
+
+  // Check if a referee is playing in the current match
+  const isRefereePlayingInMatch = (refereeId) => {
+    if (!match || !tournament?.participants) return false;
+
+    const category = tournament.category;
+
+    // Get participant IDs for this match
+    const participant1Id = match.participant1_id;
+    const participant2Id = match.participant2_id;
+
+    // Find the participants in the tournament
+    const participants = tournament.participants.filter(
+      p => p.id === participant1Id || p.id === participant2Id
+    );
+
+    // Check based on tournament category
+    for (const participant of participants) {
+      if (category === 'singles') {
+        // For singles, check user_id directly
+        if (participant.user_id === refereeId) {
+          return true;
+        }
+      } else if (category === 'doubles') {
+        // For doubles, check players array
+        if (participant.players) {
+          const isInPair = participant.players.some(player => player.id === refereeId);
+          if (isInPair) return true;
+        }
+      } else if (category === 'teams') {
+        // For teams, check members array
+        if (participant.members) {
+          const isInTeam = participant.members.some(member => member.id === refereeId);
+          if (isInTeam) return true;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-primary-500 to-primary-600 px-6 py-6 relative">
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 p-2 hover:bg-white/20 rounded-lg transition-all"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
+          
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
+              <Award className="w-8 h-8 text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-white mb-1">Assign Match officials</h2>
+              <p className="text-white/90 text-sm">
+                {tournament?.name}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Match Info */}
+        <div className="bg-primary-50 border-b border-primary-200 px-6 py-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-primary-500 font-semibold">Match Details</p>
+                <p className="text-primary-700 font-bold">
+                  {match.participant1?.name || 'TBD'} vs {match.participant2?.name || 'TBD'}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm text-primary-500">Round {match.round_number}</p>
+                {match.match_date && (
+                  <p className="text-sm text-primary-700 font-semibold">
+                    {formatDate(match.match_date)} {match.match_time}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Search Bar */}
+        <div className="p-6 border-b border-gray-200">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search for referee by name or email..."
+              className="w-full pl-10 pr-4 py-3 border-2 border-gray-300 rounded-lg focus:border-primary-500 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Referees List */}
+        <div className="p-6 overflow-y-auto max-h-[400px]">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="text-center">
+                <Loader className="w-12 h-12 text-primary-500 animate-spin mx-auto mb-3" />
+                <p className="text-gray-600">Loading referees...</p>
+              </div>
+            </div>
+          ) : filteredReferees.length === 0 ? (
+            <div className="text-center py-12">
+              <User className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No Referees Found</h3>
+              <p className="text-gray-600">
+                {searchQuery ? 'Try adjusting your search' : 'No available referees at the moment'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600 mb-4">
+                {filteredReferees.length} {filteredReferees.length === 1 ? 'referee' : 'referees'} available
+              </p>
+              
+              {filteredReferees.map((referee) => (
+                <div
+                  key={referee.id}
+                  className="bg-white border-2 border-gray-200 rounded-xl p-4 hover:border-primary-300 hover:shadow-md transition-all"
+                >
+                  <div className="flex items-center gap-4">
+                    {/* Profile Image */}
+                    <div className="relative flex-shrink-0">
+                      {referee.profile_image ? (
+                        <img
+                          src={getImageUrl(referee.profile_image)}
+                          alt={`${referee.first_name} ${referee.last_name}`}
+                          className="w-14 h-14 rounded-full object-cover border-2 border-primary-200"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                            e.target.nextSibling.style.display = 'flex';
+                          }}
+                        />
+                      ) : null}
+                      <div
+                        className="w-14 h-14 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center text-white text-lg font-bold"
+                        style={{ display: referee.profile_image ? 'none' : 'flex' }}
+                      >
+                        {getUserInitials(referee.first_name, referee.last_name)}
+                      </div>
+                    </div>
+
+                    {/* Referee Info */}
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-gray-900 text-lg">
+                          {referee.first_name} {referee.last_name}
+                        </h4>
+                        {isRefereePlayingInMatch(referee.id) && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 text-xs font-semibold rounded-full border border-orange-300">
+                            <Users className="w-3 h-3" />
+                            Playing Match
+                          </span>
+                        )}
+                        {getRefereeInvitationStatus(referee.id) === 'pending' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full border border-blue-300">
+                            <Clock className="w-3 h-3" />
+                            Invitation Pending
+                          </span>
+                        )}
+                        {getRefereeInvitationStatus(referee.id) === 'accepted' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full border border-green-300">
+                            <CheckCircle className="w-3 h-3" />
+                            Accepted
+                          </span>
+                        )}
+                        {getRefereeInvitationStatus(referee.id) === 'declined' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 text-xs font-semibold rounded-full border border-red-300">
+                            <XCircle className="w-3 h-3" />
+                            Declined
+                          </span>
+                        )}
+                      </div>
+                      {referee.email && (
+                        <p className="text-sm text-gray-600">{referee.email}</p>
+                      )}
+                      
+                      {/* Stats */}
+                      <div className="flex items-center gap-4 mt-2">
+                        {referee.average_rating > 0 && (
+                          <div className="flex items-center gap-1 text-sm">
+                            <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
+                            <span className="font-semibold text-gray-900">
+                              {referee.average_rating.toFixed(1)}
+                            </span>
+                          </div>
+                        )}
+                        {referee.matches_completed > 0 && (
+                          <div className="flex items-center gap-1 text-sm text-gray-600">
+                            <CheckCircle className="w-4 h-4 text-primary-500" />
+                            <span>{referee.matches_completed} matches</span>
+                          </div>
+                        )}
+                        {referee.reliability_score > 0 && (
+                          <div className="text-sm">
+                            <span className="text-gray-600">Reliability: </span>
+                            <span className="font-semibold text-primary-500">
+                              {Number(referee.reliability_score).toFixed(0)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Assign Button */}
+                    <button
+                      onClick={() => handleAssign(referee.id)}
+                      disabled={
+                        assigning === referee.id ||
+                        getRefereeInvitationStatus(referee.id) === 'pending' ||
+                        getRefereeInvitationStatus(referee.id) === 'accepted'
+                        // COMMENTED OUT: Playing in match validation - allows inviting players
+                        // || isRefereePlayingInMatch(referee.id)
+                      }
+                      className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary-500 to-primary-600 text-white font-semibold rounded-lg hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                      title={
+                        getRefereeInvitationStatus(referee.id) === 'pending'
+                          ? 'Invitation already sent - waiting for response'
+                          : getRefereeInvitationStatus(referee.id) === 'accepted'
+                          ? 'Referee has already accepted this assignment'
+                          : getRefereeInvitationStatus(referee.id) === 'declined'
+                          ? 'Click to resend invitation (previously declined)'
+                          : 'Send invitation to this referee'
+                      }
+                    >
+                      {assigning === referee.id ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Assigning...
+                        </>
+                      ) : (
+                        <>
+                          <Award className="w-4 h-4" />
+                          Assign
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+          <p className="text-sm text-gray-600">
+            Referee will receive a notification to accept or decline
+          </p>
+          <button
+            onClick={onClose}
+            className="px-6 py-2 text-gray-700 font-semibold hover:bg-gray-200 rounded-lg transition-all"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RefereeAssignmentModal;

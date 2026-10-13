@@ -1,0 +1,195 @@
+import { useState } from 'react';
+import {
+  Users,
+  Shield,
+  User,
+  Trash2,
+  AlertCircle,
+  CheckCircle,
+  Loader,
+  Crown
+} from 'lucide-react';
+import { removeMember } from '../services/teamService';
+
+const TeamMembersList = ({ team, members, isCapOrCreator, currentUserId, onMemberRemoved }) => {
+  const [removingId, setRemovingId] = useState(null);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+
+  const handleRemoveMember = async (memberId, memberName) => {
+    if (!window.confirm(`Are you sure you want to remove ${memberName} from the team?`)) {
+      return;
+    }
+
+    setRemovingId(memberId);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await removeMember(team.id, memberId);
+      setSuccess(`${memberName} has been removed from the team`);
+      
+      // Notify parent to refresh
+      if (onMemberRemoved) {
+        setTimeout(() => {
+          onMemberRemoved();
+          setSuccess(null);
+        }, 2000);
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to remove member');
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  const getMemberRole = (member) => {
+    if (member.user_id === team.creator_id && member.user_id === team.captain_id) {
+      return { label: 'Creator & Captain', icon: Crown, color: 'text-yellow-600', bg: 'bg-yellow-100' };
+    }
+    if (member.user_id === team.captain_id) {
+      return { label: 'Captain', icon: Shield, color: 'text-emerald-600', bg: 'bg-emerald-100' };
+    }
+    if (member.user_id === team.creator_id) {
+      return { label: 'Creator', icon: Crown, color: 'text-purple-600', bg: 'bg-purple-100' };
+    }
+    return { label: 'Member', icon: User, color: 'text-blue-600', bg: 'bg-blue-100' };
+  };
+
+  const canRemoveMember = (member) => {
+    // Cannot remove captain
+    if (member.user_id === team.captain_id) return false;
+    // Cannot remove yourself if you're the captain
+    if (member.user_id === currentUserId && member.user_id === team.captain_id) return false;
+    // Only captain or creator can remove
+    return isCapOrCreator;
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl flex items-center justify-center">
+            <Users className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-gray-900">Team Members</h3>
+            <p className="text-sm text-gray-600">
+              {members.length} / {team.max_players} members
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Success/Error Messages */}
+      {success && (
+        <div className="bg-emerald-50 border-l-4 border-emerald-500 text-emerald-700 px-4 py-3 rounded-lg mb-4 flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{success}</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg mb-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <span className="text-sm">{error}</span>
+        </div>
+      )}
+
+      {/* Members List */}
+      {members.length === 0 ? (
+        <div className="text-center py-8">
+          <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+          <p className="text-gray-600">No members yet</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {members.map((member) => {
+            const role = getMemberRole(member);
+            const RoleIcon = role.icon;
+            const removable = canRemoveMember(member);
+
+            return (
+              <div
+                key={member.id}
+                className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 transition-all"
+              >
+                <div className="flex items-center gap-4 flex-1">
+                  {/* Avatar */}
+                  <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-blue-700 rounded-full flex items-center justify-center text-white font-bold">
+                    {member.first_name?.[0]}{member.last_name?.[0]}
+                  </div>
+
+                  {/* Member Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="font-bold text-gray-900 truncate">
+                        {member.first_name} {member.last_name}
+                      </p>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${role.bg} ${role.color}`}>
+                        <RoleIcon className="w-3 h-3" />
+                        {role.label}
+                      </span>
+                    </div>
+                    
+                    <div className="flex items-center gap-4 text-sm text-gray-600">
+                      {member.position && (
+                        <span>Position: <span className="font-semibold">{member.position}</span></span>
+                      )}
+                      {member.jersey_number && (
+                        <span>Jersey: <span className="font-semibold">#{member.jersey_number}</span></span>
+                      )}
+                      {!member.position && !member.jersey_number && (
+                        <span className="text-gray-400 italic">No position assigned</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  {removable && (
+                    <button
+                      onClick={() => handleRemoveMember(member.user_id, `${member.first_name} ${member.last_name}`)}
+                      disabled={removingId === member.user_id}
+                      className="flex items-center gap-2 px-3 py-2 border-2 border-red-600 text-red-600 font-semibold rounded-lg hover:bg-red-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {removingId === member.user_id ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Removing...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="w-4 h-4" />
+                          Remove
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Info Box */}
+      {isCapOrCreator && (
+        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-blue-800">
+              <p className="font-semibold mb-1">Team Management:</p>
+              <ul className="list-disc list-inside space-y-1 text-blue-700">
+                <li>You can remove members except the captain</li>
+                <li>Transfer captaincy before removing the captain</li>
+                <li>Minimum {Math.ceil(team.max_players / 2)} members required to register</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TeamMembersList;

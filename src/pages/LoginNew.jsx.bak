@@ -1,0 +1,527 @@
+import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { useGoogleLogin } from '@react-oauth/google';
+import toast from 'react-hot-toast';
+import { clearError, setUser } from '../store/slices/authSlice';
+import { Phone, AlertCircle, Trophy, ArrowRight, Loader, CheckCircle } from 'lucide-react';
+import apiClient from '../config/api';
+import Logo from '../components/Logo';
+import LogoAuth from '../components/LogoAuth';
+
+const LoginNew = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { isAuthenticated } = useSelector((state) => state.auth);
+  
+  // Step management: 1 = Phone Entry, 2 = OTP Verification
+  const [currentStep, setCurrentStep] = useState(1);
+  
+  // Phone & OTP
+  const [phone, setPhone] = useState('');
+  const [displayPhone, setDisplayPhone] = useState('');
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+  
+  const [localError, setLocalError] = useState('');
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [facebookLoading, setFacebookLoading] = useState(false);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard');
+    }
+  }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+    };
+  }, [dispatch]);
+
+  // Resend timer countdown
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const timer = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendTimer]);
+
+  // Format phone number for display
+  const formatPhoneDisplay = (value) => {
+    const cleaned = value.replace(/\D/g, '');
+    if (cleaned.length <= 10) {
+      return cleaned.replace(/(\d{5})(\d{0,5})/, '$1 $2').trim();
+    }
+    return cleaned.substring(0, 10).replace(/(\d{5})(\d{5})/, '$1 $2');
+  };
+
+  // Handle phone input
+  const handlePhoneChange = (e) => {
+    const value = e.target.value.replace(/\D/g, '');
+    if (value.length <= 10) {
+      setDisplayPhone(formatPhoneDisplay(value));
+      setPhone(`+91${value}`);
+      setLocalError('');
+    }
+  };
+
+  // Send OTP
+  const handleSendOTP = async () => {
+    if (displayPhone.replace(/\s/g, '').length !== 10) {
+      setLocalError('Please enter a valid 10-digit mobile number');
+      return;
+    }
+
+    try {
+      setOtpLoading(true);
+      setLocalError('');
+      
+      const response = await apiClient.post('/auth/send-otp', {
+        phone,
+        purpose: 'login'
+      });
+
+      if (response.data.success) {
+        setOtpSent(true);
+        setResendTimer(60);
+        toast.success('OTP sent successfully!');
+        setCurrentStep(2);
+      }
+    } catch (error) {
+      console.error('Send OTP error:', error);
+      setLocalError(error.response?.data?.error || 'Failed to send OTP');
+      toast.error(error.response?.data?.error || 'Failed to send OTP');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  // Verify OTP and Login
+  const handleLoginWithOTP = async () => {
+    if (otp.length !== 6) {
+      setLocalError('Please enter a valid 6-digit OTP');
+      return;
+    }
+
+    try {
+      setVerifyingOtp(true);
+      setLocalError('');
+      
+      const response = await apiClient.post('/auth/login-otp', {
+        phone,
+        otp
+      });
+
+      if (response.data.success) {
+        localStorage.setItem('accessToken', response.data.data.tokens.accessToken);
+        localStorage.setItem('refreshToken', response.data.data.tokens.refreshToken);
+        localStorage.setItem('user', JSON.stringify(response.data.data.user));
+        
+        // Update Redux state
+        dispatch(setUser(response.data.data.user));
+        
+        toast.success('Login successful! Welcome back.');
+        navigate('/dashboard');
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      setLocalError(error.response?.data?.error || 'Invalid OTP');
+      toast.error(error.response?.data?.error || 'Invalid OTP');
+    } finally {
+      setVerifyingOtp(false);
+    }
+  };
+
+  // Google Login Handler
+  const handleGoogleLogin = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      try {
+        setGoogleLoading(true);
+        
+        // Get user info from Google
+        const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+        });
+        const userInfo = await userInfoResponse.json();
+
+        // Send to backend
+        const response = await apiClient.post('/auth/google', {
+          token: tokenResponse.access_token,
+          userInfo
+        });
+
+        if (response.data.success) {
+          if (response.data.needsProfileCompletion) {
+            // New user - redirect to registration
+            sessionStorage.setItem('googleData', JSON.stringify(response.data.googleData));
+            toast('Please complete your profile', { icon: 'ℹ️' });
+            navigate('/register');
+            return;
+          }
+
+          // Existing user - store tokens and login
+          localStorage.setItem('accessToken', response.data.data.tokens.accessToken);
+          localStorage.setItem('refreshToken', response.data.data.tokens.refreshToken);
+          localStorage.setItem('user', JSON.stringify(response.data.data.user));
+          
+          // Update Redux state
+          dispatch(setUser(response.data.data.user));
+          
+          toast.success('Login successful! Welcome back.');
+          navigate('/dashboard');
+        }
+      } catch (error) {
+        console.error('Google login error:', error);
+        toast.error(error.response?.data?.error || 'Google login failed');
+      } finally {
+        setGoogleLoading(false);
+      }
+    },
+    onError: () => {
+      toast.error('Google login failed');
+    },
+  });
+
+  // Facebook Login Handler
+  const handleFacebookLogin = () => {
+    setFacebookLoading(true);
+    
+    window.FB.login((response) => {
+      if (response.authResponse) {
+        const accessToken = response.authResponse.accessToken;
+        
+        // Get user info from Facebook
+        window.FB.api('/me', { fields: 'id,name,email,first_name,last_name,picture' }, async (userInfo) => {
+          try {
+            // Send to backend
+            const backendResponse = await apiClient.post('/auth/facebook', {
+              accessToken,
+              userInfo
+            });
+
+            if (backendResponse.data.success) {
+              if (backendResponse.data.needsProfileCompletion) {
+                // New user - redirect to registration
+                sessionStorage.setItem('facebookData', JSON.stringify(backendResponse.data.facebookData));
+                toast('Please complete your profile', { icon: 'ℹ️' });
+                navigate('/register');
+                return;
+              }
+
+              // Existing user - store tokens and login
+              localStorage.setItem('accessToken', backendResponse.data.data.tokens.accessToken);
+              localStorage.setItem('refreshToken', backendResponse.data.data.tokens.refreshToken);
+              localStorage.setItem('user', JSON.stringify(backendResponse.data.data.user));
+              
+              // Update Redux state
+              dispatch(setUser(backendResponse.data.data.user));
+              
+              toast.success('Login successful! Welcome back.');
+              navigate('/dashboard');
+            }
+          } catch (error) {
+            console.error('Facebook login error:', error);
+            toast.error(error.response?.data?.error || 'Facebook login failed');
+          } finally {
+            setFacebookLoading(false);
+          }
+        });
+      } else {
+        toast.error('Facebook login cancelled');
+        setFacebookLoading(false);
+      }
+    }, { scope: 'public_profile,email' });
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-teal-50 flex items-center justify-center p-4">
+      <div className="max-w-6xl w-full">
+        <div className="grid md:grid-cols-2 gap-0 bg-white rounded-3xl shadow-2xl overflow-hidden">
+          {/* Left Side - Branding & Description */}
+          <div className="hidden md:flex flex-col justify-center bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-700 p-12 text-white">
+            <div className="space-y-8">
+              {/* Logo */}
+              <div>
+                <LogoAuth size="lg" showText={true} />
+                {/* <Logo size="md" showText={true} clickable={true} /> */}
+              </div>
+              {/* <p className="text-white/90 text-lg mt-4">Tournament Management Platform</p> */}
+
+              {/* Description */}
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-3xl font-bold mb-3">Welcome Back!</h2>
+                  <p className="text-emerald-100 text-lg leading-relaxed">
+                    Login to manage your tournaments, track your performance, and connect with the sports community.
+                  </p>
+                </div>
+
+                {/* Features */}
+                <div className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="bg-white/20 rounded-lg p-2 mt-1">
+                      <CheckCircle className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-lg">Organize Tournaments</h3>
+                      <p className="text-emerald-100 text-sm">Create and manage tournaments with ease</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="bg-white/20 rounded-lg p-2 mt-1">
+                      <CheckCircle className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-lg">Track Performance</h3>
+                      <p className="text-emerald-100 text-sm">Monitor your stats and achievements</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="bg-white/20 rounded-lg p-2 mt-1">
+                      <CheckCircle className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-lg">Join Community</h3>
+                      <p className="text-emerald-100 text-sm">Connect with players and teams</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Side - Login Form */}
+          <div className="p-8 md:p-12">
+            {/* Mobile Header */}
+            <div className="md:hidden text-center mb-8">
+              <div className="flex justify-center mb-4">
+                <Logo size="md" showText={true} clickable={false} />
+              </div>
+              <p className="text-gray-600">Login to your account</p>
+            </div>
+
+            {/* Desktop Header */}
+            <div className="hidden md:block mb-8">
+              <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h2>
+              <p className="text-gray-600">Login to your account</p>
+            </div>
+
+            {/* Form Content */}
+            <div>
+          {/* Step 1: Phone Number */}
+          {currentStep === 1 && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 mb-2">Enter Your Mobile Number</h2>
+                <p className="text-sm text-gray-600">We'll send you an OTP to login</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Mobile Number
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Phone className="h-5 w-5 text-gray-400" />
+                    <span className="ml-2 text-gray-600">+91</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={displayPhone}
+                    onChange={handlePhoneChange}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && displayPhone.replace(/\s/g, '').length === 10 && !otpLoading) {
+                        handleSendOTP();
+                      }
+                    }}
+                    placeholder="98765 43210"
+                    className="block w-full pl-20 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  />
+                </div>
+              </div>
+
+              {localError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>{localError}</span>
+                </div>
+              )}
+
+              <button
+                onClick={handleSendOTP}
+                disabled={otpLoading || displayPhone.replace(/\s/g, '').length !== 10}
+                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+              >
+                {otpLoading ? (
+                  <>
+                    <Loader className="h-5 w-5 animate-spin" />
+                    Sending OTP...
+                  </>
+                ) : (
+                  <>
+                    Send OTP
+                    <ArrowRight className="h-5 w-5" />
+                  </>
+                )}
+              </button>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-300"></div>
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="px-2 bg-white text-gray-500">Or continue with</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={handleGoogleLogin}
+                  disabled={googleLoading}
+                  className="border-2 border-gray-300 text-gray-700 py-3 rounded-lg font-semibold hover:bg-gray-50 hover:border-emerald-300 disabled:bg-gray-100 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all"
+                >
+                  {googleLoading ? (
+                    <Loader className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <>
+                      <svg className="h-5 w-5" viewBox="0 0 24 24">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                      </svg>
+                      <span className="hidden sm:inline">Google</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleFacebookLogin}
+                  disabled={facebookLoading}
+                  className="border-2 border-gray-300 text-gray-700 py-3 rounded-lg font-semibold hover:bg-gray-50 hover:border-blue-300 disabled:bg-gray-100 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all"
+                >
+                  {facebookLoading ? (
+                    <Loader className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <>
+                      <svg className="h-5 w-5" viewBox="0 0 24 24">
+                        <path fill="#1877F2" d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                      </svg>
+                      <span className="hidden sm:inline">Facebook</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: OTP Verification */}
+          {currentStep === 2 && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 mb-2">Verify OTP</h2>
+                <p className="text-sm text-gray-600">
+                  Enter the 6-digit code sent to +91 {displayPhone}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  OTP Code
+                </label>
+                <input
+                  type="text"
+                  value={otp}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, '');
+                    if (value.length <= 6) {
+                      setOtp(value);
+                      setLocalError('');
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && otp.length === 6 && !verifyingOtp) {
+                      handleLoginWithOTP();
+                    }
+                  }}
+                  placeholder="000000"
+                  className="block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-center text-2xl tracking-widest transition-all"
+                  maxLength={6}
+                />
+              </div>
+
+              {localError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 p-3 rounded-lg">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>{localError}</span>
+                </div>
+              )}
+
+              <button
+                onClick={handleLoginWithOTP}
+                disabled={verifyingOtp || otp.length !== 6}
+                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+              >
+                {verifyingOtp ? (
+                  <>
+                    <Loader className="h-5 w-5 animate-spin" />
+                    Logging in...
+                  </>
+                ) : (
+                  <>
+                    Login
+                    <CheckCircle className="h-5 w-5" />
+                  </>
+                )}
+              </button>
+
+              <div className="text-center">
+                {resendTimer > 0 ? (
+                  <p className="text-sm text-gray-600">
+                    Resend OTP in {resendTimer}s
+                  </p>
+                ) : (
+                  <button
+                    onClick={handleSendOTP}
+                    className="text-sm text-emerald-600 hover:text-emerald-700 font-medium transition-colors"
+                  >
+                    Resend OTP
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => {
+                  setCurrentStep(1);
+                  setOtp('');
+                  setLocalError('');
+                }}
+                className="w-full text-gray-600 hover:text-gray-800 text-sm font-medium"
+              >
+                Change Phone Number
+              </button>
+            </div>
+          )}
+            </div>
+
+            {/* Footer */}
+            <div className="text-center mt-8">
+              <p className="text-gray-600">
+                Don't have an account?{' '}
+                <Link to="/register" className="text-emerald-600 hover:text-emerald-700 font-semibold transition-colors">
+                  Sign up
+                </Link>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default LoginNew;

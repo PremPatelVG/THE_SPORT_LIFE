@@ -1,0 +1,424 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Trophy, TrendingUp, Award, Calendar, MapPin, Users, ArrowLeft, CheckCircle, XCircle, Clock } from 'lucide-react';
+import Navbar from '../components/Navbar';
+import * as tournamentService from '../services/tournamentService';
+import * as matchService from '../services/matchService';
+
+/**
+ * Participant Performance Page
+ * Shows all matches played by a participant/team/pair in a tournament
+ * Displays statistics: wins, losses, performance metrics
+ */
+const ParticipantPerformance = () => {
+  const { tournamentId, participantId } = useParams();
+  const navigate = useNavigate();
+  
+  const [loading, setLoading] = useState(true);
+  const [tournament, setTournament] = useState(null);
+  const [participant, setParticipant] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [statistics, setStatistics] = useState({
+    totalMatches: 0,
+    wins: 0,
+    losses: 0,
+    winRate: 0,
+    pointsScored: 0,
+    pointsConceded: 0
+  });
+
+  
+  useEffect(() => {
+    loadData();
+  }, [tournamentId, participantId]);
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      
+      // Load tournament details
+      const tournamentData = await tournamentService.getTournamentById(tournamentId);
+      setTournament(tournamentData);
+      
+      // Load all matches for this participant
+      const matchesData = await matchService.getParticipantMatches(tournamentId, participantId);
+      
+      // Sort matches - latest first (by date, then by id)
+      const sortedMatches = matchesData.sort((a, b) => {
+        // First sort by date (descending)
+        if (a.match_date && b.match_date) {
+          const dateCompare = new Date(b.match_date) - new Date(a.match_date);
+          if (dateCompare !== 0) return dateCompare;
+        }
+        // Then by ID (descending) for matches on same date
+        return b.id - a.id;
+      });
+      
+      setMatches(sortedMatches);
+      
+      // Get participant details from first match
+      if (matchesData.length > 0) {
+        const firstMatch = matchesData[0];
+        // Determine which participant name to use
+        const isParticipant1 = firstMatch.participant1_id === parseInt(participantId);
+        const participantName = isParticipant1 ? firstMatch.participant1_name : firstMatch.participant2_name;
+        
+        const participantData = {
+          id: participantId,
+          tournament_id: tournamentId,
+          participant_name: participantName,
+          is_winner: tournamentData.winner_participant_id === parseInt(participantId)
+        };
+        setParticipant(participantData);
+      } else {
+        // No matches found, set basic participant data
+        const participantData = await tournamentService.getParticipantById(tournamentId, participantId);
+        setParticipant(participantData);
+      }
+      
+      // Calculate statistics
+      calculateStatistics(matchesData, participantId);
+      
+    } catch (error) {
+      console.error('Error loading participant performance:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const calculateStatistics = (matchesData, participantId) => {
+    let wins = 0;
+    let losses = 0;
+    let pointsScored = 0;
+    let pointsConceded = 0;
+
+    matchesData.forEach(match => {
+      if (match.status === 'completed' && match.winner_participant_id) {
+        // Check if this participant won
+        const isParticipant1 = match.participant1_id === parseInt(participantId);
+        const isWinner = match.winner_participant_id === parseInt(participantId);
+        
+        console.log('Match:', match.id, 'Winner:', match.winner_participant_id, 'Participant:', participantId, 'Is Winner:', isWinner);
+        
+        if (isWinner) {
+          wins++;
+        } else {
+          losses++;
+        }
+
+        // Calculate points (sport-specific)
+        if (match.live_score) {
+          const score = typeof match.live_score === 'string' ? JSON.parse(match.live_score) : match.live_score;
+          
+          if (isParticipant1) {
+            pointsScored += score.participant1?.goals || score.participant1?.sets_won || score.participant1?.games_won || 0;
+            pointsConceded += score.participant2?.goals || score.participant2?.sets_won || score.participant2?.games_won || 0;
+          } else {
+            pointsScored += score.participant2?.goals || score.participant2?.sets_won || score.participant2?.games_won || 0;
+            pointsConceded += score.participant1?.goals || score.participant1?.sets_won || score.participant1?.games_won || 0;
+          }
+        }
+      }
+    });
+
+    const totalMatches = wins + losses;
+    const winRate = totalMatches > 0 ? ((wins / totalMatches) * 100).toFixed(1) : 0;
+
+    setStatistics({
+      totalMatches,
+      wins,
+      losses,
+      winRate,
+      pointsScored,
+      pointsConceded
+    });
+  };
+
+  const getParticipantName = (participant) => {
+    console.log('Participant:', participant);
+    if (!participant) return 'Unknown';
+    
+    // Team
+    if (participant.participant_name) {
+      return participant.participant_name;
+    }
+    
+    // Doubles Pair
+    if (participant.player1_name && participant.player2_name) {
+      return `${participant.player1_name} / ${participant.player2_name}`;
+    }
+    
+    // Singles
+    if (participant.user_name) {
+      return participant.user_name;
+    }
+    
+    return 'Unknown';
+  };
+
+  const getMatchResult = (match) => {
+    if (match.status !== 'completed') {
+      return { result: 'pending', label: 'Pending', color: 'gray' };
+    }
+
+    const isParticipant1 = match.participant1_id === parseInt(participantId);
+    const isWinner = match.winner_participant_id === parseInt(participantId);
+
+    if (match.winner_participant_id === null) {
+      return { result: 'draw', label: 'Draw', color: 'blue' };
+    }
+
+    if (isWinner) {
+      return { result: 'win', label: 'Win', color: 'green' };
+    } else {
+      return { result: 'loss', label: 'Loss', color: 'red' };
+    }
+  };
+
+  const getMatchScore = (match) => {
+    if (!match.live_score) return '-';
+    
+    try {
+      const score = JSON.parse(match.live_score);
+      const isParticipant1 = match.participant1_id === parseInt(participantId);
+      
+      // Sport-specific score display
+      if (tournament.sport_name === 'Football' || tournament.sport_name === 'Basketball' || tournament.sport_name === 'Hockey') {
+        const p1Goals = score.participant1?.goals || 0;
+        const p2Goals = score.participant2?.goals || 0;
+        return isParticipant1 ? `${p1Goals} - ${p2Goals}` : `${p2Goals} - ${p1Goals}`;
+      }
+      
+      if (['Table Tennis', 'Squash', 'Pickleball', 'Volleyball'].includes(tournament.sport_name)) {
+        const p1Games = score.participant1?.games_won || score.participant1?.sets_won || 0;
+        const p2Games = score.participant2?.games_won || score.participant2?.sets_won || 0;
+        return isParticipant1 ? `${p1Games} - ${p2Games}` : `${p2Games} - ${p1Games}`;
+      }
+      
+      if (['Badminton', 'Tennis', 'Padel'].includes(tournament.sport_name)) {
+        const p1Sets = score.participant1?.sets_won || 0;
+        const p2Sets = score.participant2?.sets_won || 0;
+        return isParticipant1 ? `${p1Sets} - ${p2Sets}` : `${p2Sets} - ${p1Sets}`;
+      }
+      
+      return '-';
+    } catch (error) {
+      return '-';
+    }
+  };
+
+  const getOpponentName = (match) => {
+    const isParticipant1 = match.participant1_id === parseInt(participantId);
+    return isParticipant1 ? match.participant2_name : match.participant1_name;
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navbar />
+        <div className="flex items-center justify-center h-96">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
+            <p className="mt-4 text-gray-600">Loading performance data...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Back Button */}
+        <button
+          onClick={() => navigate(`/tournaments/${tournamentId}`)}
+          className="mb-6 flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>Back to Tournament</span>
+        </button>
+
+        {/* Header */}
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl shadow-lg p-8 text-white mb-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">{getParticipantName(participant)}</h1>
+              <p className="text-emerald-100 text-lg mb-4">{tournament?.name}</p>
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-4 h-4" />
+                  <span>{tournament?.sport_name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  <span className="capitalize">{tournament?.category}</span>
+                </div>
+                {participant?.is_winner && (
+                  <div className="flex items-center gap-2 bg-yellow-400 text-gray-900 px-3 py-1 rounded-full font-bold">
+                    <Award className="w-4 h-4" />
+                    <span>CHAMPION</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Statistics Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          {/* Total Matches */}
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-600 text-sm">Total Matches</p>
+              <Calendar className="w-5 h-5 text-blue-600" />
+            </div>
+            <p className="text-3xl font-bold text-gray-900">{statistics.totalMatches}</p>
+          </div>
+
+          {/* Wins */}
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-600 text-sm">Wins</p>
+              <CheckCircle className="w-5 h-5 text-green-600" />
+            </div>
+            <p className="text-3xl font-bold text-green-600">{statistics.wins}</p>
+          </div>
+
+          {/* Losses */}
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-600 text-sm">Losses</p>
+              <XCircle className="w-5 h-5 text-red-600" />
+            </div>
+            <p className="text-3xl font-bold text-red-600">{statistics.losses}</p>
+          </div>
+
+          {/* Win Rate */}
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-600 text-sm">Win Rate</p>
+              <TrendingUp className="w-5 h-5 text-purple-600" />
+            </div>
+            <p className="text-3xl font-bold text-purple-600">{statistics.winRate}%</p>
+          </div>
+        </div>
+
+        {/* Match History */}
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6">Match History</h2>
+
+          {matches.length === 0 ? (
+            <div className="text-center py-12">
+              <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500">No matches found</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {matches.map((match) => {
+                const result = getMatchResult(match);
+                const isParticipant1 = match.participant1_id === parseInt(participantId);
+                
+                return (
+                  <div
+                    key={match.id}
+                    className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-all cursor-pointer"
+                    onClick={() => navigate(`/matches/${match.id}/history`)}
+                  >
+                    {/* Header Section */}
+                    <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3 flex items-center justify-between">
+                      <div className="flex items-center gap-3 text-white">
+                        <Trophy className="w-5 h-5" />
+                        <span className="font-semibold">{tournament?.sport_name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-white bg-opacity-20 text-black px-3 py-1 rounded-full text-xs font-semibold">
+                          {match.status === 'completed' ? '✓ Completed' : match.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Match Details */}
+                    <div className="p-4">
+                      {/* Sport and Date Info */}
+                      <div className="flex items-center gap-4 mb-3 text-sm text-gray-600">
+                        <div className="flex items-center gap-1">
+                          <Trophy className="w-4 h-4" />
+                          <span>{tournament?.sport_name}</span>
+                        </div>
+                        {match.match_date && (
+                          <div className="flex items-center gap-1">
+                            <Calendar className="w-4 h-4" />
+                            <span>{new Date(match.match_date).toLocaleDateString()} • {match.match_time?.substring(0, 5)}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* VS Section */}
+                      <div className="bg-gray-50 rounded-lg p-4 mb-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <p className="text-xs text-gray-500 mb-1">You (teams)</p>
+                            <p className="font-bold text-emerald-600 text-lg">{getParticipantName(participant)}</p>
+                          </div>
+                          <div className="px-6">
+                            <p className="text-gray-400 font-semibold text-xl">VS</p>
+                          </div>
+                          <div className="flex-1 text-right">
+                            <p className="text-xs text-gray-500 mb-1">Opponent</p>
+                            <p className="font-bold text-gray-900 text-lg">{getOpponentName(match)}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Result Banner */}
+                      <div className={`rounded-lg p-3 mb-3 text-center ${
+                        result.result === 'win' ? 'bg-green-50' :
+                        result.result === 'loss' ? 'bg-red-50' :
+                        result.result === 'draw' ? 'bg-blue-50' :
+                        'bg-gray-50'
+                      }`}>
+                        <p className={`font-bold text-lg ${
+                          result.result === 'win' ? 'text-green-600' :
+                          result.result === 'loss' ? 'text-red-600' :
+                          result.result === 'draw' ? 'text-blue-600' :
+                          'text-gray-600'
+                        }`}>
+                          {result.result === 'win' ? '✓ Won' : 
+                           result.result === 'loss' ? '✕ Lost' : 
+                           result.result === 'draw' ? '= Draw' : 'Pending'}
+                        </p>
+                      </div>
+
+                      {/* Additional Info */}
+                      <div className="space-y-2 text-sm text-gray-600">
+                        <div className="flex items-center gap-2">
+                          <Trophy className="w-4 h-4" />
+                          <span>{match.round_name || `Round ${match.round_number}`}</span>
+                        </div>
+                        {match.venue_name && (
+                          <div className="flex items-center gap-2">
+                            <MapPin className="w-4 h-4" />
+                            <span>Match officials: {match.venue_name}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* View Details Button */}
+                      <button className="w-full mt-4 bg-emerald-600 text-white py-2 rounded-lg font-semibold hover:bg-emerald-700 transition-colors">
+                        View Match Details
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ParticipantPerformance;

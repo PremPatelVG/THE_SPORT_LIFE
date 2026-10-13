@@ -1,0 +1,233 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Trophy,
+  Calendar,
+  Users,
+  CheckCircle,
+  Clock,
+  TrendingUp,
+  AlertCircle,
+  Loader,
+  Construction
+} from 'lucide-react';
+// import adminApi from '../../config/adminApi'; // TODO: Future Implementation
+
+const Dashboard = () => {
+  const navigate = useNavigate();
+  // const [stats, setStats] = useState(null);
+  // const [loading, setLoading] = useState(true);
+  // const [error, setError] = useState('');
+
+  // TODO: Future Implementation - Dashboard Stats API
+  // useEffect(() => {
+  //   fetchDashboardStats();
+  // }, []);
+
+  // const fetchDashboardStats = async () => {
+  //   try {
+  //     setLoading(true);
+  //     const response = await adminApi.get('/dashboard/stats');
+  //     setStats(response.data.data);
+  //   } catch (err) {
+  //     console.error('Failed to fetch dashboard stats:', err);
+  //     setError('Failed to load dashboard statistics');
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // };
+
+  // if (loading) {
+  //   return (
+  //     <div className="flex items-center justify-center h-96">
+  //       <Loader className="w-8 h-8 animate-spin text-blue-600" />
+  //     </div>
+  //   );
+  // }
+
+  // if (error) {
+  //   return (
+  //     <div className="bg-red-50 border border-red-200 rounded-lg p-6 flex items-start gap-3">
+  //       <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+  //       <div>
+  //         <h3 className="font-semibold text-red-900">Error</h3>
+  //         <p className="text-red-700">{error}</p>
+  //       </div>
+  //     </div>
+  //   );
+  // }
+
+  // Mock stats for UI display - TODO: Replace with real API data
+  const stats = {
+    total_tournaments: 0,
+    open_tournaments: 0,
+    ongoing_tournaments: 0,
+    pending_approvals: 0,
+    total_matches: 0,
+    completed_matches: 0,
+    total_users: 0,
+    active_users: 0
+  };
+
+  const statCards = [
+    {
+      title: 'Total Tournaments',
+      value: stats?.total_tournaments || 0,
+      icon: Trophy,
+      color: 'blue',
+      bgColor: 'bg-blue-100',
+      textColor: 'text-blue-600',
+      subtext: `${stats?.open_tournaments || 0} open, ${stats?.ongoing_tournaments || 0} ongoing`
+    },
+    {
+      title: 'Pending Approvals',
+      value: stats?.pending_approvals || 0,
+      icon: Clock,
+      color: 'yellow',
+      bgColor: 'bg-yellow-100',
+      textColor: 'text-yellow-600',
+      subtext: 'Awaiting review',
+      clickable: true,
+      onClick: () => navigate('/admin/tournaments/approvals')
+    },
+    {
+      title: 'Total Matches',
+      value: stats?.total_matches || 0,
+      icon: Calendar,
+      color: 'purple',
+      bgColor: 'bg-purple-100',
+      textColor: 'text-purple-600',
+      subtext: `${stats?.completed_matches || 0} completed`
+    },
+    {
+      title: 'Total Users',
+      value: stats?.total_users || 0,
+      icon: Users,
+      color: 'green',
+      bgColor: 'bg-green-100',
+      textColor: 'text-green-600',
+      subtext: `${stats?.active_users || 0} active`
+    }
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Future Implementation Notice */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl p-6 shadow-sm">
+        <div className="flex items-start gap-4">
+          <div className="bg-blue-100 p-3 rounded-lg">
+            <Construction className="w-6 h-6 text-blue-600" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-blue-900 mb-1">Dashboard Statistics - Future Implementation</h3>
+            <p className="text-blue-700 text-sm">
+              Real-time statistics and analytics will be available in the next update. 
+              Currently showing placeholder data for UI demonstration.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Welcome Banner */}
+      <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-8 text-white shadow-lg">
+        <h1 className="text-3xl font-bold mb-2">Welcome to Admin Dashboard</h1>
+        <p className="text-emerald-100">Manage your SportLife platform efficiently</p>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {statCards.map((card, index) => {
+          const Icon = card.icon;
+          const CardWrapper = card.clickable ? 'button' : 'div';
+
+          return (
+            <CardWrapper
+              key={index}
+              onClick={card.onClick}
+              className={`bg-white rounded-xl shadow-sm p-6 border border-gray-100 ${
+                card.clickable ? 'hover:shadow-lg transition-shadow cursor-pointer' : ''
+              }`}
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className={`${card.bgColor} p-3 rounded-lg`}>
+                  <Icon className={`w-6 h-6 ${card.textColor}`} />
+                </div>
+                {card.clickable && (
+                  <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full font-semibold">
+                    Action Required
+                  </span>
+                )}
+              </div>
+              <h3 className="text-gray-600 text-sm font-medium mb-1">{card.title}</h3>
+              <p className="text-3xl font-bold text-gray-900 mb-1">{card.value}</p>
+              <p className="text-sm text-gray-500">{card.subtext}</p>
+            </CardWrapper>
+          );
+        })}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Quick Actions</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <button
+            onClick={() => navigate('/admin/tournaments/approvals')}
+            className="flex items-center gap-3 p-4 border-2 border-yellow-200 bg-yellow-50 rounded-lg hover:bg-yellow-100 transition-colors"
+          >
+            <CheckCircle className="w-6 h-6 text-yellow-600" />
+            <div className="text-left">
+              <p className="font-semibold text-gray-900">Review Approvals</p>
+              <p className="text-sm text-gray-600">{stats?.pending_approvals || 0} pending</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => navigate('/admin/tournaments')}
+            className="flex items-center gap-3 p-4 border-2 border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+          >
+            <Trophy className="w-6 h-6 text-blue-600" />
+            <div className="text-left">
+              <p className="font-semibold text-gray-900">View Tournaments</p>
+              <p className="text-sm text-gray-600">Manage all tournaments</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => navigate('/admin/users')}
+            className="flex items-center gap-3 p-4 border-2 border-green-200 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+          >
+            <Users className="w-6 h-6 text-green-600" />
+            <div className="text-left">
+              <p className="font-semibold text-gray-900">Manage Users</p>
+              <p className="text-sm text-gray-600">View all users</p>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      {/* Recent Activity Placeholder */}
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+        <h2 className="text-xl font-bold text-gray-900 mb-4">System Overview</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="text-center p-4 bg-gray-50 rounded-lg">
+            <TrendingUp className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+            <p className="text-2xl font-bold text-gray-900">{stats?.open_tournaments || 0}</p>
+            <p className="text-sm text-gray-600">Open Tournaments</p>
+          </div>
+          <div className="text-center p-4 bg-gray-50 rounded-lg">
+            <Calendar className="w-8 h-8 text-purple-600 mx-auto mb-2" />
+            <p className="text-2xl font-bold text-gray-900">{stats?.ongoing_tournaments || 0}</p>
+            <p className="text-sm text-gray-600">Ongoing Tournaments</p>
+          </div>
+          <div className="text-center p-4 bg-gray-50 rounded-lg">
+            <CheckCircle className="w-8 h-8 text-green-600 mx-auto mb-2" />
+            <p className="text-2xl font-bold text-gray-900">{stats?.completed_matches || 0}</p>
+            <p className="text-sm text-gray-600">Completed Matches</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;

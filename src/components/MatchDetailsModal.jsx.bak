@@ -1,0 +1,322 @@
+import { useState } from 'react';
+import { X, Trophy, Calendar, MapPin, User, Clock, Save, Edit } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+
+const MatchDetailsModal = ({ match, tournament, isOrganizer, onClose, onUpdate }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [score1, setScore1] = useState(match.participant1_score || '');
+  const [score2, setScore2] = useState(match.participant2_score || '');
+  const [loading, setLoading] = useState(false);
+
+  if (!match) return null;
+
+  const handleSaveScore = async () => {
+    if (score1 === '' || score2 === '') {
+      toast.error('Please enter scores for both participants');
+      return;
+    }
+
+    const numScore1 = Number(score1);
+    const numScore2 = Number(score2);
+
+    if (isNaN(numScore1) || isNaN(numScore2)) {
+      toast.error('Scores must be valid numbers');
+      return;
+    }
+
+    if (numScore1 === numScore2) {
+      toast.error('Scores cannot be tied. Please enter a winner.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const winnerId = numScore1 > numScore2 ? match.participant1_id : match.participant2_id;
+      
+      await onUpdate({
+        matchId: match.id,
+        participant1_score: numScore1,
+        participant2_score: numScore2,
+        winner_participant_id: winnerId,
+        status: 'completed'
+      });
+
+      toast.success('Match score updated successfully!');
+      setIsEditing(false);
+    } catch (error) {
+      toast.error(error.message || 'Failed to update match score');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusBadge = () => {
+    const configs = {
+      completed: {
+        bg: 'bg-emerald-100',
+        text: 'text-emerald-700',
+        label: 'Completed'
+      },
+      in_progress: {
+        bg: 'bg-blue-100',
+        text: 'text-blue-700',
+        label: 'In Progress'
+      },
+      scheduled: {
+        bg: 'bg-yellow-100',
+        text: 'text-yellow-700',
+        label: 'Scheduled'
+      },
+      pending: {
+        bg: 'bg-gray-100',
+        text: 'text-gray-700',
+        label: 'Pending'
+      }
+    };
+
+    const config = configs[match.status] || configs.pending;
+    return (
+      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${config.bg} ${config.text}`}>
+        {config.label}
+      </span>
+    );
+  };
+
+  const formatDate = (date) => {
+    if (!date) return 'Not scheduled';
+    return new Date(date).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const isWinner1 = match.winner_participant_id === match.participant1_id;
+  const isWinner2 = match.winner_participant_id === match.participant2_id;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-6 relative">
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 p-2 hover:bg-white/20 rounded-lg transition-all"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
+          
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
+              <Trophy className="w-8 h-8 text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-white mb-1">
+                Match #{match.match_number || match.id}
+              </h2>
+              <p className="text-white/90 text-sm">
+                {match.round_name || `Round ${match.round_number}`}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
+          {/* Status */}
+          <div className="mb-6">
+            {getStatusBadge()}
+          </div>
+
+          {/* Participants & Scores */}
+          <div className="bg-gray-50 rounded-xl p-6 mb-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-4">Match Result</h3>
+            
+            <div className="space-y-3">
+              {/* Participant 1 */}
+              <div className={`flex items-center justify-between p-4 rounded-xl ${
+                isWinner1 ? 'bg-emerald-100 border-2 border-emerald-400' : 'bg-white border-2 border-gray-200'
+              }`}>
+                <div className="flex items-center gap-3 flex-1">
+                  {isWinner1 && <Trophy className="w-5 h-5 text-emerald-600" />}
+                  <div>
+                    <p className={`font-bold ${isWinner1 ? 'text-emerald-900' : 'text-gray-900'}`}>
+                      {match.participant1_name || 'TBD'}
+                    </p>
+                    {match.participant1_seed && (
+                      <p className="text-xs text-gray-500">Seed #{match.participant1_seed}</p>
+                    )}
+                  </div>
+                </div>
+                {isEditing && isOrganizer ? (
+                  <input
+                    type="number"
+                    value={score1}
+                    onChange={(e) => setScore1(e.target.value)}
+                    className="w-20 px-3 py-2 border-2 border-gray-300 rounded-lg text-center font-bold text-xl focus:border-purple-500 focus:outline-none"
+                    placeholder="0"
+                  />
+                ) : (
+                  <span className={`font-bold text-2xl ${
+                    isWinner1 ? 'text-emerald-900' : 'text-gray-700'
+                  }`}>
+                    {match.participant1_score ?? '-'}
+                  </span>
+                )}
+              </div>
+
+              {/* VS */}
+              <div className="flex items-center justify-center">
+                <span className="text-sm font-semibold text-gray-400">VS</span>
+              </div>
+
+              {/* Participant 2 */}
+              <div className={`flex items-center justify-between p-4 rounded-xl ${
+                isWinner2 ? 'bg-emerald-100 border-2 border-emerald-400' : 'bg-white border-2 border-gray-200'
+              }`}>
+                <div className="flex items-center gap-3 flex-1">
+                  {isWinner2 && <Trophy className="w-5 h-5 text-emerald-600" />}
+                  <div>
+                    <p className={`font-bold ${isWinner2 ? 'text-emerald-900' : 'text-gray-900'}`}>
+                      {match.participant2_name || 'TBD'}
+                    </p>
+                    {match.participant2_seed && (
+                      <p className="text-xs text-gray-500">Seed #{match.participant2_seed}</p>
+                    )}
+                  </div>
+                </div>
+                {isEditing && isOrganizer ? (
+                  <input
+                    type="number"
+                    value={score2}
+                    onChange={(e) => setScore2(e.target.value)}
+                    className="w-20 px-3 py-2 border-2 border-gray-300 rounded-lg text-center font-bold text-xl focus:border-purple-500 focus:outline-none"
+                    placeholder="0"
+                  />
+                ) : (
+                  <span className={`font-bold text-2xl ${
+                    isWinner2 ? 'text-emerald-900' : 'text-gray-700'
+                  }`}>
+                    {match.participant2_score ?? '-'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Edit/Save Buttons */}
+            {isOrganizer && match.status !== 'completed' && (
+              <div className="mt-4">
+                {isEditing ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSaveScore}
+                      disabled={loading}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 text-white font-semibold rounded-lg hover:bg-emerald-700 transition-all disabled:opacity-50"
+                    >
+                      <Save className="w-4 h-4" />
+                      {loading ? 'Saving...' : 'Save Score'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsEditing(false);
+                        setScore1(match.participant1_score || '');
+                        setScore2(match.participant2_score || '');
+                      }}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition-all"
+                  >
+                    <Edit className="w-4 h-4" />
+                    Enter Score
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Match Details */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-gray-700">Match Details</h3>
+            
+            <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+              <div className="flex items-start gap-3">
+                <Calendar className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs text-gray-500">Date & Time</p>
+                  <p className="font-semibold text-gray-900">{formatDate(match.match_date)}</p>
+                </div>
+              </div>
+
+              {match.venue_name && (
+                <div className="flex items-start gap-3">
+                  <MapPin className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500">Venue</p>
+                    <p className="font-semibold text-gray-900">{match.venue_name}</p>
+                    {match.court_name && (
+                      <p className="text-sm text-gray-600">Court {match.court_name}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {match.referee_name && (
+                <div className="flex items-start gap-3">
+                  <User className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500">Match officials</p>
+                    <p className="font-semibold text-gray-900">{match.referee_name}</p>
+                  </div>
+                </div>
+              )}
+
+              {match.duration && (
+                <div className="flex items-start gap-3">
+                  <Clock className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-gray-500">Duration</p>
+                    <p className="font-semibold text-gray-900">{match.duration} minutes</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tournament Info */}
+          {tournament && (
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Tournament</h3>
+              <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl p-4 border-2 border-purple-200">
+                <p className="font-bold text-purple-900">{tournament.name}</p>
+                <p className="text-sm text-purple-700 mt-1">
+                  {tournament.format_type || tournament.format} • {tournament.category}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-6 py-2 bg-gray-900 text-white font-semibold rounded-lg hover:bg-gray-800 transition-all"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MatchDetailsModal;

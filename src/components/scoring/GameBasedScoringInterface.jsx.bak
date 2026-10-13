@@ -1,0 +1,922 @@
+import { useState, useEffect } from 'react';
+import { Trophy, Circle, Users, Clock, RotateCcw, RefreshCw, Undo, ArrowLeftRight, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { getServingIcon } from '../../utils/sportIcons';
+import api from '../../config/api';
+
+/**
+ * Game-Based Scoring Interface
+ * Handles: Table Tennis, Squash, Volleyball
+ * 
+ * Scoring Systems:
+ * - Table Tennis: 11 points (win by 2), best of 5/7 games
+ * - Squash: 11 points (win by 2), best of 5 games
+ * - Volleyball: 25 points (15 in 5th set, win by 2), best of 5 sets
+ */
+const GameBasedScoringInterface = ({ match, liveScore, sport, onAddPoint, onToggleServer, onUndo }) => {
+  const [showSubModal, setShowSubModal] = useState(false);
+  const [showTimeoutModal, setShowTimeoutModal] = useState(false);
+  const [selectedTeam, setSelectedTeam] = useState(null);
+  const [isSwapped, setIsSwapped] = useState(false);
+  const [showMatchEndConfirmation, setShowMatchEndConfirmation] = useState(false);
+  const [confirmingMatchEnd, setConfirmingMatchEnd] = useState(false);
+  const [isDeuceBlinking, setIsDeuceBlinking] = useState(false);
+  
+  // Check if match end confirmation is needed
+  useEffect(() => {
+    if (liveScore?.awaiting_match_end_confirmation) {
+      setShowMatchEndConfirmation(true);
+    } else {
+      setShowMatchEndConfirmation(false);
+    }
+  }, [liveScore?.awaiting_match_end_confirmation]);
+
+  // Trigger blink animation when deuce happens
+  useEffect(() => {
+    const currentGameIndex = (liveScore?.current_game || liveScore?.current_set || 1) - 1;
+    const scoresField = liveScore?.match_structure === 'game_based' ? 'game_scores' : 'set_scores';
+    
+    const p1Score = liveScore?.participant1?.[scoresField]?.[currentGameIndex] || 0;
+    const p2Score = liveScore?.participant2?.[scoresField]?.[currentGameIndex] || 0;
+    const isCurrentlyTied = p1Score === p2Score;
+    
+    // Only blink if deuce count > 0 AND scores are currently tied
+    if (liveScore?.current_game_deuce_count > 0 && isCurrentlyTied) {
+      setIsDeuceBlinking(true);
+      const timer = setTimeout(() => setIsDeuceBlinking(false), 3000); // Blink for 3 seconds
+      return () => clearTimeout(timer);
+    } else {
+      // Turn off blinking immediately if not in deuce anymore
+      setIsDeuceBlinking(false);
+    }
+  }, [liveScore?.current_game_deuce_count, liveScore?.participant1, liveScore?.participant2]);
+
+  // Swap participants if isSwapped is true
+  const participant1 = isSwapped ? match.participant2_details : match.participant1_details;
+  const participant2 = isSwapped ? match.participant1_details : match.participant2_details;
+  const participant1Side = isSwapped ? 'participant2' : 'participant1';
+  const participant2Side = isSwapped ? 'participant1' : 'participant2';
+  
+  // Check if match is doubles (case-insensitive)
+  const isDoublesMatch = match.category?.toLowerCase() === 'doubles' || match.tournament_category?.toLowerCase() === 'doubles';
+  
+  // Debug log
+  console.log('🔍 Match category check:', {
+    category: match.category,
+    tournament_category: match.tournament_category,
+    isDoublesMatch,
+    participant1,
+    participant2
+  });
+
+  const isVolleyball = sport.name === 'Volleyball';
+  const isTableTennis = sport.name === 'Table Tennis';
+  const isPickleball = sport.name === 'Pickleball';
+  const isSquash = sport.name === 'Squash';
+  const isBadminton = sport.name === 'Badminton';
+  
+  // Debug deuce display
+  console.log('🔥 Deuce Debug:', {
+    sportName: sport.name,
+    isTableTennis,
+    isPickleball,
+    isSquash,
+    isVolleyball,
+    isBadminton,
+    deuceCount: liveScore?.current_game_deuce_count,
+    shouldShow: (isTableTennis || isPickleball || isSquash || isVolleyball || isBadminton) && liveScore?.current_game_deuce_count > 0
+  });
+
+  /**
+   * Get participant name based on category
+   */
+  const getParticipantName = (details) => {
+    if (!details) return 'Player';
+    
+    // Singles: user object
+    if (details.user) {
+      return `${details.user.first_name} ${details.user.last_name}`;
+    }
+    
+    // Doubles: player1 and player2 objects (from backend API)
+    if (details.player1 && details.player2) {
+      return `${details.player1.first_name} ${details.player1.last_name} / ${details.player2.first_name} ${details.player2.last_name}`;
+    }
+    
+    // Teams: team name
+    if (details.team) {
+      return details.team.name;
+    }
+    
+    // Fallback to name property if exists
+    if (details.name) {
+      return details.name;
+    }
+    
+    return 'Player';
+  };
+
+  /**
+   * Get current game/set score (points in current game)
+   */
+  const getCurrentScore = (participantSide) => {
+    if (!liveScore) return 0;
+    
+    // Get current game/set index (0-based)
+    const currentIndex = (liveScore.current_game || liveScore.current_set || 1) - 1;
+    
+    // Get score from game_scores or set_scores array
+    if (participantSide === 'participant1') {
+      const scores = liveScore.participant1?.game_scores || liveScore.participant1?.set_scores || [];
+      return scores[currentIndex] || 0;
+    } else {
+      const scores = liveScore.participant2?.game_scores || liveScore.participant2?.set_scores || [];
+      return scores[currentIndex] || 0;
+    }
+  };
+
+  /**
+   * Get games/sets won
+   */
+  const getGamesWon = (participantSide) => {
+    if (!liveScore) return 0;
+    
+    // Get games_won or sets_won from participant object
+    if (participantSide === 'participant1') {
+      return liveScore.participant1?.games_won || liveScore.participant1?.sets_won || 0;
+    } else {
+      return liveScore.participant2?.games_won || liveScore.participant2?.sets_won || 0;
+    }
+  };
+
+  /**
+   * Get current game/set number
+   */
+  const getCurrentGameSet = () => {
+    if (!liveScore) return 1;
+    
+    if (isVolleyball) {
+      return liveScore.current_set || 1;
+    }
+    
+    return liveScore.current_game || 1;
+  };
+
+  /**
+   * Get serving indicator
+   */
+  const isServing = (participantSide) => {
+    if (!liveScore) return false;
+    
+    if (isVolleyball) {
+      // Use new current_server field (with fallback to old serving_team)
+      return (liveScore.current_server || liveScore.serving_team || liveScore.server) === participantSide;
+    }
+    
+    return liveScore.serving_player === participantSide;
+  };
+
+  /**
+   * Get server name (handles singles and doubles)
+   */
+  const getServerName = () => {
+    if (!liveScore || !liveScore.server) return 'Unknown';
+    
+    const serverSide = liveScore.server || liveScore.serving_player || liveScore.current_server;
+    // Use original match details (not swapped) for server name
+    const serverDetails = serverSide === 'participant1' ? match.participant1_details : match.participant2_details;
+    
+    // For doubles, check if specific player is selected
+    if (isDoublesMatch && serverDetails && (serverDetails.player1 || serverDetails.player2)) {
+      const servingPlayerId = liveScore.serving_player_id;
+      
+      if (servingPlayerId) {
+        // Show specific player name with pair in parentheses
+        const player1Id = serverDetails.player1?.id;
+        const player2Id = serverDetails.player2?.id;
+        
+        if (servingPlayerId === player1Id) {
+          const playerName = `${serverDetails.player1.first_name} ${serverDetails.player1.last_name}`;
+          const pairName = `${serverDetails.player1.first_name} ${serverDetails.player1.last_name} / ${serverDetails.player2.first_name} ${serverDetails.player2.last_name}`;
+          return `${playerName} (${pairName})`;
+        } else if (servingPlayerId === player2Id) {
+          const playerName = `${serverDetails.player2.first_name} ${serverDetails.player2.last_name}`;
+          const pairName = `${serverDetails.player1.first_name} ${serverDetails.player1.last_name} / ${serverDetails.player2.first_name} ${serverDetails.player2.last_name}`;
+          return `${playerName} (${pairName})`;
+        }
+      }
+    }
+    
+    return getParticipantName(serverDetails);
+  };
+
+  /**
+   * Handle server toggle (switches between pairs)
+   */
+  const handleToggleServer = async () => {
+    try {
+      if (onToggleServer) {
+        await onToggleServer();
+      }
+    } catch (error) {
+      console.error('Failed to toggle server:', error);
+      alert('Failed to toggle server: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  /**
+   * Handle player selection within same pair (doubles only)
+   */
+  const handlePlayerSelect = async (playerId) => {
+    try {
+      if (onToggleServer) {
+        // Pass playerId to change serving player within same pair
+        await onToggleServer(playerId, true); // true = keep same pair
+      }
+    } catch (error) {
+      console.error('Failed to change serving player:', error);
+      alert('Failed to change serving player: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  /**
+   * Handle point addition
+   */
+  const handleAddPoint = async (participantSide) => {
+    try {
+      await onAddPoint(participantSide, 'point');
+    } catch (error) {
+      console.error('Failed to add point:', error);
+      alert('Failed to add point: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  /**
+   * Handle match end confirmation
+   */
+  const handleConfirmMatchEnd = async (confirmed) => {
+    try {
+      setConfirmingMatchEnd(true);
+      const response = await api.post(`/matches/${match.id}/score/confirm-end`, {
+        confirmed
+      });
+      
+      if (response.data.success) {
+        setShowMatchEndConfirmation(false);
+        // Refresh page or navigate to match details
+        if (confirmed) {
+          window.location.reload();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to confirm match end:', error);
+      alert('Failed to confirm match end: ' + (error.response?.data?.error || error.message));
+    } finally {
+      setConfirmingMatchEnd(false);
+    }
+  };
+
+  /**
+   * Get score label
+   */
+  const getScoreLabel = () => {
+    if (isVolleyball) return 'Sets Won';
+    return 'Games Won';
+  };
+
+  /**
+   * Get current label
+   */
+  const getCurrentLabel = () => {
+    if (isVolleyball) return `Set ${getCurrentGameSet()}`;
+    return `Game ${getCurrentGameSet()}`;
+  };
+
+  /**
+   * Get target score for current game/set from match_config
+   */
+  const getTargetScore = () => {
+    // Get from tournament match_config
+    const matchConfig = match?.match_config;
+    
+    console.log('🎯 getTargetScore - match_config:', matchConfig);
+    
+    if (matchConfig) {
+      // Parse if string
+      const config = typeof matchConfig === 'string' ? JSON.parse(matchConfig) : matchConfig;
+      
+      console.log('🎯 Parsed config:', config);
+      console.log('🎯 points_per_game:', config.points_per_game);
+      
+      if (isVolleyball) {
+        const currentSet = getCurrentGameSet();
+        const totalSets = config.total_sets || 5;
+        // Last set usually has different target (15 instead of 25)
+        return currentSet === totalSets ? (config.deciding_set_points || 15) : (config.points_per_set || 25);
+      }
+      
+      // Table Tennis, Squash - use points_per_game from config
+      const targetScore = config.points_per_game || 11;
+      console.log('🎯 Returning target score:', targetScore);
+      return targetScore;
+    }
+    
+    console.log('⚠️ No match_config found, using default: 11');
+    
+    // Fallback to defaults if no config
+    if (isVolleyball) {
+      const currentSet = getCurrentGameSet();
+      return currentSet === 5 ? 15 : 25;
+    }
+    
+    return 11;
+  };
+
+  /**
+   * Get match configuration
+   */
+  const getMatchConfig = () => {
+    const matchConfig = match?.match_config;
+    if (!matchConfig) return null;
+    
+    return typeof matchConfig === 'string' ? JSON.parse(matchConfig) : matchConfig;
+  };
+
+  /**
+   * Get games/sets to win from config
+   */
+  const getGamesToWin = () => {
+    const config = getMatchConfig();
+    if (!config) return isVolleyball ? 3 : 3; // Default
+    
+    return config.games_to_win || config.sets_to_win || 3;
+  };
+
+  /**
+   * Get total games/sets from config
+   */
+  const getTotalGames = () => {
+    const config = getMatchConfig();
+    if (!config) return isVolleyball ? 5 : 5; // Default
+    
+    return config.total_games || config.total_sets || 5;
+  };
+
+  /**
+   * Get rotation info (Volleyball only)
+   */
+  const getRotation = (participantSide) => {
+    if (!liveScore || !isVolleyball) return null;
+    
+    const rotationKey = participantSide === 'participant1' ? 'rotation_team_a' : 'rotation_team_b';
+    return liveScore[rotationKey] || [1, 2, 3, 4, 5, 6];
+  };
+
+  /**
+   * Get substitutions count (Volleyball only)
+   */
+  const getSubstitutions = (participantSide) => {
+    if (!liveScore || !isVolleyball) return { used: 0, max: 6 };
+    
+    const subKey = participantSide === 'participant1' ? 'substitutions_team_a' : 'substitutions_team_b';
+    return {
+      used: liveScore[subKey] || 0,
+      max: 6
+    };
+  };
+
+  /**
+   * Get timeouts count (Volleyball only)
+   */
+  const getTimeouts = (participantSide) => {
+    if (!liveScore || !isVolleyball) return { used: 0, max: 2 };
+    
+    const timeoutKey = participantSide === 'participant1' ? 'timeouts_team_a' : 'timeouts_team_b';
+    return {
+      used: liveScore[timeoutKey] || 0,
+      max: 2
+    };
+  };
+
+  return (
+    <div>
+      {/* Swap Sides Button */}
+      <div className="mb-4">
+        <button
+          onClick={() => setIsSwapped(!isSwapped)}
+          className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-bold rounded-lg hover:shadow-lg transition-all flex items-center justify-center gap-2"
+        >
+          <ArrowLeftRight className="w-5 h-5" />
+          SWAP SIDES
+        </button>
+      </div>
+      {/* Scoreboard */}
+      <div className={`bg-gradient-to-br from-teal-600 to-cyan-700 rounded-2xl shadow-2xl p-8 mb-6 text-white transition-all ${
+        isDeuceBlinking ? 'animate-pulse ring-4 ring-yellow-400 ring-opacity-75' : ''
+      }`}>
+        <div className="text-center mb-4">
+          <div className="inline-block bg-white/20 backdrop-blur-sm px-4 py-1 rounded-full text-sm font-bold">
+            {getCurrentLabel()} • Target: {getTargetScore()} points
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center gap-12">
+          {/* Participant 1 */}
+          <div className="flex-1 text-center">
+            {/* Current Game Score (LARGE) */}
+            <div className="text-8xl font-bold mb-2">
+              {getCurrentScore(participant1Side)}
+            </div>
+            
+            {/* Games/Sets Won (smaller, below score) */}
+            <div className="text-xl font-semibold mb-2 opacity-90">
+              {getScoreLabel()}: {getGamesWon(participant1Side)}
+            </div>
+            
+            {/* Participant Name */}
+            <div className="text-xl font-semibold mb-2">
+              {getParticipantName(participant1)}
+            </div>
+            
+            {/* Serving Indicator */}
+            <div className="h-8 mt-2 flex items-center justify-center">
+              {isServing(participant1Side) && (() => {
+                const servingPlayerId = liveScore?.serving_player_id;
+                let playerName = null;
+                
+                // Get specific player name for doubles (NOT for Volleyball - it auto-switches)
+                if (!isVolleyball && isDoublesMatch && participant1?.player1 && participant1?.player2 && servingPlayerId) {
+                  const player1Id = participant1.player1?.id;
+                  const player2Id = participant1.player2?.id;
+                  
+                  if (servingPlayerId === player1Id) {
+                    playerName = `${participant1.player1.first_name} ${participant1.player1.last_name}`;
+                  } else if (servingPlayerId === player2Id) {
+                    playerName = `${participant1.player2.first_name} ${participant1.player2.last_name}`;
+                  }
+                }
+                
+                return (
+                  <div className="inline-flex items-center gap-2 bg-yellow-400 text-gray-900 px-3 py-1 rounded-full text-sm font-bold">
+                    <span className="text-lg">{getServingIcon(sport.name)}</span>
+                    <span>Serving</span>
+                    {playerName && <span>({playerName})</span>}
+                    {isVolleyball && liveScore?.participant1?.current_server_position && (
+                      <span className="ml-1 bg-yellow-500 px-2 py-0.5 rounded">
+                        Pos {liveScore.participant1.current_server_position}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Volleyball Stats */}
+            {isVolleyball && (
+              <div className="mt-3 space-y-1 text-xs opacity-75">
+                <div>Subs: {getSubstitutions(participant1Side).used}/{getSubstitutions(participant1Side).max}</div>
+                <div>Timeouts: {getTimeouts(participant1Side).used}/{getTimeouts(participant1Side).max}</div>
+                {liveScore?.participant1?.current_server_position && (
+                  <div className="font-semibold">Rotation: Position {liveScore.participant1.current_server_position}/6</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* VS Divider */}
+          <div className="flex flex-col items-center gap-2">
+            <div className="text-4xl font-bold opacity-75">VS</div>
+            
+            {/* Deuce Count for Table Tennis, Pickleball, Squash, Volleyball & Badminton */}
+            {(isTableTennis || isPickleball || isSquash || isVolleyball || isBadminton) && liveScore?.current_game_deuce_count > 0 && (
+              <div className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg animate-pulse">
+                🔥 DEUCE x{liveScore.current_game_deuce_count}
+              </div>
+            )}
+          </div>
+
+          {/* Participant 2 */}
+          <div className="flex-1 text-center">
+            {/* Current Game Score (LARGE) */}
+            <div className="text-8xl font-bold mb-2">
+              {getCurrentScore(participant2Side)}
+            </div>
+            
+            {/* Games/Sets Won (smaller, below score) */}
+            <div className="text-xl font-semibold mb-2 opacity-90">
+              {getScoreLabel()}: {getGamesWon(participant2Side)}
+            </div>
+            
+            {/* Participant Name */}
+            <div className="text-xl font-semibold mb-2">
+              {getParticipantName(participant2)}
+            </div>
+            
+            {/* Serving Indicator */}
+            <div className="h-8 mt-2 flex items-center justify-center">
+              {isServing(participant2Side) && (() => {
+                const servingPlayerId = liveScore?.serving_player_id;
+                let playerName = null;
+                
+                // Get specific player name for doubles (NOT for Volleyball - it auto-switches)
+                if (!isVolleyball && isDoublesMatch && participant2?.player1 && participant2?.player2 && servingPlayerId) {
+                  const player1Id = participant2.player1?.id;
+                  const player2Id = participant2.player2?.id;
+                  
+                  if (servingPlayerId === player1Id) {
+                    playerName = `${participant2.player1.first_name} ${participant2.player1.last_name}`;
+                  } else if (servingPlayerId === player2Id) {
+                    playerName = `${participant2.player2.first_name} ${participant2.player2.last_name}`;
+                  }
+                }
+                
+                return (
+                  <div className="inline-flex items-center gap-2 bg-yellow-400 text-gray-900 px-3 py-1 rounded-full text-sm font-bold">
+                    <span className="text-lg">{getServingIcon(sport.name)}</span>
+                    <span>Serving</span>
+                    {playerName && <span>({playerName})</span>}
+                    {isVolleyball && liveScore?.participant2?.current_server_position && (
+                      <span className="ml-1 bg-yellow-500 px-2 py-0.5 rounded">
+                        Pos {liveScore.participant2.current_server_position}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Volleyball Stats */}
+            {isVolleyball && (
+              <div className="mt-3 space-y-1 text-xs opacity-75">
+                <div>Subs: {getSubstitutions(participant2Side).used}/{getSubstitutions(participant2Side).max}</div>
+                <div>Timeouts: {getTimeouts(participant2Side).used}/{getTimeouts(participant2Side).max}</div>
+                {liveScore?.participant2?.current_server_position && (
+                  <div className="font-semibold">Rotation: Position {liveScore.participant2.current_server_position}/6</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Match Info Bar */}
+        <div className="mt-6 bg-white/10 backdrop-blur-sm rounded-lg p-4">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-5 h-5" />
+              <span className="font-semibold">{sport.name}</span>
+            </div>
+            <div className="text-center">
+              <span className="opacity-90">
+                Best of {getTotalGames()} {isVolleyball ? 'Sets' : 'Games'} • First to {getGamesToWin()}
+              </span>
+            </div>
+            <div className="text-right">
+              <span className="font-bold">{match.tournament_category || 'Singles'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Undo Button - Centered above point buttons */}
+      {onUndo && (
+        <div className="mb-4">
+          <button
+            onClick={onUndo}
+            className="w-full py-3 bg-gradient-to-r from-red-500 to-red-600 text-white font-bold rounded-lg hover:shadow-lg transition-all flex items-center justify-center gap-2"
+          >
+            <Undo className="w-5 h-5" />
+            UNDO LAST POINT
+          </button>
+        </div>
+      )}
+
+      {/* Point Buttons */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        {/* Participant 1 Point Button */}
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="font-bold text-gray-900 mb-4 text-center">
+            {getParticipantName(participant1)}
+          </h3>
+          <button
+            onClick={() => handleAddPoint(participant1Side)}
+            className="w-full py-6 bg-gradient-to-r from-teal-500 to-teal-600 text-white font-bold text-xl rounded-lg hover:shadow-lg transition-all flex items-center justify-center gap-2"
+          >
+            <Trophy className="w-6 h-6" />
+            POINT
+          </button>
+
+          {/* Volleyball Controls */}
+          {isVolleyball && (
+            <div className="mt-3 space-y-2">
+              <button
+                onClick={() => {
+                  setSelectedTeam(participant1Side);
+                  setShowSubModal(true);
+                }}
+                className="w-full py-2 bg-blue-100 text-blue-700 font-semibold rounded-lg hover:bg-blue-200 transition-all text-sm"
+                disabled={getSubstitutions(participant1Side).used >= 6}
+              >
+                <Users className="w-4 h-4 inline mr-1" />
+                Substitution ({getSubstitutions(participant1Side).used}/6)
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedTeam(participant1Side);
+                  setShowTimeoutModal(true);
+                }}
+                className="w-full py-2 bg-yellow-100 text-yellow-700 font-semibold rounded-lg hover:bg-yellow-200 transition-all text-sm"
+                disabled={getTimeouts(participant1Side).used >= 2}
+              >
+                <Clock className="w-4 h-4 inline mr-1" />
+                Timeout ({getTimeouts(participant1Side).used}/2)
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Participant 2 Point Button */}
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="font-bold text-gray-900 mb-4 text-center">
+            {getParticipantName(participant2)}
+          </h3>
+          <button
+            onClick={() => handleAddPoint(participant2Side)}
+            className="w-full py-6 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-bold text-xl rounded-lg hover:shadow-lg transition-all flex items-center justify-center gap-2"
+          >
+            <Trophy className="w-6 h-6" />
+            POINT
+          </button>
+
+          {/* Volleyball Controls */}
+          {isVolleyball && (
+            <div className="mt-3 space-y-2">
+              <button
+                onClick={() => {
+                  setSelectedTeam(participant2Side);
+                  setShowSubModal(true);
+                }}
+                className="w-full py-2 bg-blue-100 text-blue-700 font-semibold rounded-lg hover:bg-blue-200 transition-all text-sm"
+                disabled={getSubstitutions(participant2Side).used >= 6}
+              >
+                <Users className="w-4 h-4 inline mr-1" />
+                Substitution ({getSubstitutions(participant2Side).used}/6)
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedTeam(participant2Side);
+                  setShowTimeoutModal(true);
+                }}
+                className="w-full py-2 bg-yellow-100 text-yellow-700 font-semibold rounded-lg hover:bg-yellow-200 transition-all text-sm"
+                disabled={getTimeouts(participant2Side).used >= 2}
+              >
+                <Clock className="w-4 h-4 inline mr-1" />
+                Timeout ({getTimeouts(participant2Side).used}/2)
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Server Toggle Section - NOT for Volleyball (auto-switches on point) */}
+      {!isVolleyball && (
+        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{getServingIcon(sport.name)}</span>
+              <div>
+                <div className="text-xs text-gray-600 font-medium">Current Server</div>
+                <div className="text-lg font-bold text-gray-900">{getServerName()}</div>
+              </div>
+            </div>
+            <button
+              onClick={handleToggleServer}
+              className="flex items-center gap-2 px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg font-semibold transition-colors shadow-md"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Switch Server
+            </button>
+          </div>
+
+        {/* Doubles: Player Selection Within Pair */}
+        {isDoublesMatch && (() => {
+          const currentServerSide = liveScore?.server || 'participant1';
+          // Always use original match details (not swapped) for player names
+          const currentServerDetails = currentServerSide === 'participant1' 
+            ? match.participant1_details 
+            : match.participant2_details;
+          
+          if (!currentServerDetails || !currentServerDetails.player1 || !currentServerDetails.player2) {
+            return null;
+          }
+
+          const servingPlayerId = liveScore?.serving_player_id;
+          const player1Id = currentServerDetails.player1?.id;
+          const player2Id = currentServerDetails.player2?.id;
+
+          return (
+            <div className="border-t border-yellow-300 pt-4">
+              <div className="text-xs text-gray-600 font-medium mb-2">Who is serving in this pair?</div>
+              <div className="flex gap-3">
+                {/* Player 1 Button */}
+                <button
+                  onClick={() => handlePlayerSelect(player1Id)}
+                  className={`flex-1 flex items-center justify-between p-3 rounded-lg border-2 transition-all ${
+                    servingPlayerId === player1Id
+                      ? 'bg-emerald-100 border-emerald-500 shadow-md'
+                      : 'bg-white border-gray-300 hover:border-emerald-400'
+                  }`}
+                >
+                  <div className="text-left">
+                    <div className="font-bold text-gray-900 text-sm">
+                      {currentServerDetails.player1.first_name} {currentServerDetails.player1.last_name}
+                    </div>
+                    <div className="text-xs text-gray-600">Player 1</div>
+                  </div>
+                  {servingPlayerId === player1Id && (
+                    <span className="text-xl">{getServingIcon(sport.name)}</span>
+                  )}
+                </button>
+
+                {/* Player 2 Button */}
+                <button
+                  onClick={() => handlePlayerSelect(player2Id)}
+                  className={`flex-1 flex items-center justify-between p-3 rounded-lg border-2 transition-all ${
+                    servingPlayerId === player2Id
+                      ? 'bg-blue-100 border-blue-500 shadow-md'
+                      : 'bg-white border-gray-300 hover:border-blue-400'
+                  }`}
+                >
+                  <div className="text-left">
+                    <div className="font-bold text-gray-900 text-sm">
+                      {currentServerDetails.player2.first_name} {currentServerDetails.player2.last_name}
+                    </div>
+                    <div className="text-xs text-gray-600">Player 2</div>
+                  </div>
+                  {servingPlayerId === player2Id && (
+                    <span className="text-xl">{getServingIcon(sport.name)}</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+        </div>
+      )}
+
+      {/* Volleyball Rotation Display */}
+      {isVolleyball && liveScore && (
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+            <RotateCcw className="w-5 h-5" />
+            Court Rotation
+          </h3>
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <p className="text-sm font-semibold text-gray-700 mb-2">
+                {getParticipantName(participant1)}
+              </p>
+              <div className="flex gap-2">
+                {getRotation(participant1Side).map((pos, idx) => (
+                  <div
+                    key={idx}
+                    className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold ${
+                      idx === 0
+                        ? 'bg-teal-500 text-white'
+                        : 'bg-gray-100 text-gray-700'
+                    }`}
+                  >
+                    {pos}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Position 1 = Server</p>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-700 mb-2">
+                {getParticipantName(participant2)}
+              </p>
+              <div className="flex gap-2">
+                {getRotation(participant2Side).map((pos, idx) => (
+                  <div
+                    key={idx}
+                    className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold ${
+                      idx === 0
+                        ? 'bg-cyan-500 text-white'
+                        : 'bg-gray-100 text-gray-700'
+                    }`}
+                  >
+                    {pos}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Position 1 = Server</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Match Configuration Info */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+        <div className="flex items-start gap-3">
+          <Trophy className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-blue-800">
+            <p>
+              <strong>{sport.name} Match Format:</strong> First to <strong>{getTargetScore()} points</strong> wins each {isVolleyball ? 'set' : 'game'} 
+              {getMatchConfig()?.win_by_margin && ` (win by ${getMatchConfig().win_by_margin})`}. 
+              Best of <strong>{getTotalGames()}</strong> {isVolleyball ? 'sets' : 'games'} 
+              • First to <strong>{getGamesToWin()}</strong> wins the match.
+              {getMatchConfig()?.deuce_enabled && ' Deuce enabled.'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Game/Set History */}
+      {liveScore && (isVolleyball ? liveScore.participant1?.set_scores : liveScore.participant1?.game_scores) && (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="font-bold text-gray-900 mb-4">
+            {isVolleyball ? 'Set History' : 'Game History'}
+          </h3>
+          <div className="flex justify-center gap-3 flex-wrap">
+            {(isVolleyball ? liveScore.participant1.set_scores : liveScore.participant1.game_scores).map((p1Score, idx) => {
+              const p2Score = (isVolleyball ? liveScore.participant2.set_scores : liveScore.participant2.game_scores)[idx];
+              const isCurrent = idx === getCurrentGameSet() - 1;
+              
+              return (
+                <div
+                  key={idx}
+                  className={`px-4 py-2 rounded-lg font-bold ${
+                    isCurrent
+                      ? 'bg-teal-100 text-teal-700 border-2 border-teal-500'
+                      : 'bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  {isVolleyball ? `Set ${idx + 1}` : `Game ${idx + 1}`}: {p1Score}-{p2Score}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Match End Confirmation Modal */}
+      {showMatchEndConfirmation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-scale-in">
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertCircle className="w-12 h-12 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                Confirm Match End?
+              </h2>
+              <p className="text-gray-600">
+                This point would end the match. Do you want to declare the winner?
+              </p>
+              {liveScore?.pending_winner && (
+                <div className="mt-4 p-4 bg-emerald-50 rounded-lg">
+                  <p className="text-sm text-gray-700 mb-1">Winner:</p>
+                  <p className="text-lg font-bold text-emerald-700">
+                    {liveScore.pending_winner === 'participant1' 
+                      ? getParticipantName(match.participant1_details)
+                      : getParticipantName(match.participant2_details)
+                    }
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => handleConfirmMatchEnd(false)}
+                disabled={confirmingMatchEnd}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                <XCircle className="w-5 h-5" />
+                No, Undo Point
+              </button>
+              <button
+                onClick={() => handleConfirmMatchEnd(true)}
+                disabled={confirmingMatchEnd}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-semibold rounded-lg hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {confirmingMatchEnd ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    Confirming...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-5 h-5" />
+                    Yes, End Match
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default GameBasedScoringInterface;

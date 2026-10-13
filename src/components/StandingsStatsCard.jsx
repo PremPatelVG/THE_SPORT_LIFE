@@ -1,0 +1,249 @@
+import React from 'react';
+
+/**
+ * StandingsStatsCard Component
+ * Displays detailed statistics for a participant in the standings
+ * 
+ * Features:
+ * - Win/Loss/Draw percentages with visual bars
+ * - Clean sheets and averages
+ * - Current streaks
+ * - Form guide with color indicators
+ * 
+ * @param {object} participant - Participant data from points table
+ */
+const StandingsStatsCard = ({ participant }) => {
+  if (!participant) return null;
+
+  const { stats, advanced } = participant;
+
+  // Calculate percentage bar width
+  const getPercentageWidth = (percentage) => {
+    return `${Math.min(percentage, 100)}%`;
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6">
+      {/* Header */}
+      <div className="flex items-center mb-6">
+        {participant.participant.image && (
+          <img
+            src={participant.participant.image}
+            alt={participant.participant.name}
+            className="h-16 w-16 rounded-full mr-4 object-cover"
+            onError={(e) => {
+              e.target.style.display = 'none';
+            }}
+          />
+        )}
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">
+            {participant.participant.name}
+          </h3>
+          <p className="text-sm text-gray-500">
+            Position: #{participant.position}
+          </p>
+        </div>
+      </div>
+
+      {/* Match Statistics */}
+      <div className="mb-6">
+        <h4 className="text-sm font-semibold text-gray-700 mb-3">Match Statistics</h4>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-2xl font-bold text-gray-900">{stats.played}</div>
+            <div className="text-xs text-gray-600">Matches Played</div>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-2xl font-bold text-blue-600">{stats.points}</div>
+            <div className="text-xs text-gray-600">Total Points</div>
+          </div>
+          <div className="bg-green-50 rounded-lg p-3">
+            <div className="text-2xl font-bold text-green-600">{stats.won}</div>
+            <div className="text-xs text-gray-600">Wins</div>
+          </div>
+          <div className="bg-red-50 rounded-lg p-3">
+            <div className="text-2xl font-bold text-red-600">{stats.lost}</div>
+            <div className="text-xs text-gray-600">Losses</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Win/Loss/Draw Percentages */}
+      <div className="mb-6">
+        <h4 className="text-sm font-semibold text-gray-700 mb-3">Performance</h4>
+        
+        {/* Win Percentage */}
+        <div className="mb-3">
+          <div className="flex justify-between text-sm mb-1">
+            <span className="text-gray-600">Win Rate</span>
+            <span className="font-semibold text-green-600">
+              {advanced.winPercentage.toFixed(1)}%
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div
+              className="bg-green-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: getPercentageWidth(advanced.winPercentage) }}
+            ></div>
+          </div>
+        </div>
+
+        {/* Draw Percentage */}
+        {stats.drawn > 0 && (
+          <div className="mb-3">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600">Draw Rate</span>
+              <span className="font-semibold text-gray-600">
+                {advanced.drawPercentage.toFixed(1)}%
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-gray-400 h-2 rounded-full transition-all duration-300"
+                style={{ width: getPercentageWidth(advanced.drawPercentage) }}
+              ></div>
+            </div>
+          </div>
+        )}
+
+        {/* Loss Percentage */}
+        <div className="mb-3">
+          <div className="flex justify-between text-sm mb-1">
+            <span className="text-gray-600">Loss Rate</span>
+            <span className="font-semibold text-red-600">
+              {advanced.lossPercentage.toFixed(1)}%
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div
+              className="bg-red-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: getPercentageWidth(advanced.lossPercentage) }}
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Goals/Points Statistics */}
+      <div className="mb-6">
+        <h4 className="text-sm font-semibold text-gray-700 mb-3">Scoring</h4>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="text-center">
+            <div className="text-lg font-bold text-green-600">{stats.goalsFor}</div>
+            <div className="text-xs text-gray-600">For</div>
+          </div>
+          <div className="text-center">
+            <div className="text-lg font-bold text-red-600">{stats.goalsAgainst}</div>
+            <div className="text-xs text-gray-600">Against</div>
+          </div>
+          <div className="text-center">
+            <div className={`text-lg font-bold ${
+              stats.goalDifference > 0 ? 'text-green-600' : 
+              stats.goalDifference < 0 ? 'text-red-600' : 'text-gray-600'
+            }`}>
+              {stats.goalDifference > 0 ? '+' : ''}{stats.goalDifference}
+            </div>
+            <div className="text-xs text-gray-600">Difference</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Averages */}
+      <div className="mb-6">
+        <h4 className="text-sm font-semibold text-gray-700 mb-3">Averages</h4>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-blue-50 rounded-lg p-3">
+            <div className="text-lg font-bold text-blue-600">
+              {advanced.avgGoalsFor.toFixed(2)}
+            </div>
+            <div className="text-xs text-gray-600">Avg Goals For</div>
+          </div>
+          <div className="bg-orange-50 rounded-lg p-3">
+            <div className="text-lg font-bold text-orange-600">
+              {advanced.avgGoalsAgainst.toFixed(2)}
+            </div>
+            <div className="text-xs text-gray-600">Avg Goals Against</div>
+          </div>
+          <div className="bg-purple-50 rounded-lg p-3">
+            <div className="text-lg font-bold text-purple-600">
+              {advanced.pointsPerGame.toFixed(2)}
+            </div>
+            <div className="text-xs text-gray-600">Points Per Game</div>
+          </div>
+          <div className="bg-primary-50 rounded-lg p-3">
+            <div className="text-lg font-bold text-primary-600">
+              {advanced.cleanSheets}
+            </div>
+            <div className="text-xs text-gray-600">Clean Sheets</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Current Streaks */}
+      {(advanced.winningStreak > 0 || advanced.losingStreak > 0) && (
+        <div className="mb-6">
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">Current Streak</h4>
+          {advanced.winningStreak > 0 && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-2">
+              <div className="flex items-center">
+                <span className="text-2xl mr-2">🔥</span>
+                <div>
+                  <div className="font-bold text-green-700">
+                    {advanced.winningStreak} {advanced.winningStreak === 1 ? 'Win' : 'Wins'}
+                  </div>
+                  <div className="text-xs text-green-600">Winning Streak</div>
+                </div>
+              </div>
+            </div>
+          )}
+          {advanced.losingStreak > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <div className="flex items-center">
+                <span className="text-2xl mr-2">📉</span>
+                <div>
+                  <div className="font-bold text-red-700">
+                    {advanced.losingStreak} {advanced.losingStreak === 1 ? 'Loss' : 'Losses'}
+                  </div>
+                  <div className="text-xs text-red-600">Losing Streak</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Form Guide */}
+      {advanced.form && advanced.form.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">Recent Form (Last 5)</h4>
+          <div className="flex space-x-2">
+            {advanced.form.split('').map((result, index) => {
+              const isWin = result === 'W';
+              const isLoss = result === 'L';
+              const isDraw = result === 'D';
+              
+              return (
+                <div
+                  key={index}
+                  className={`
+                    flex-1 rounded-lg p-3 text-center
+                    ${isWin ? 'bg-green-500 text-white' : ''}
+                    ${isLoss ? 'bg-red-500 text-white' : ''}
+                    ${isDraw ? 'bg-gray-400 text-white' : ''}
+                  `}
+                >
+                  <div className="text-lg font-bold">{result}</div>
+                  <div className="text-xs opacity-75">
+                    {isWin ? 'Win' : isLoss ? 'Loss' : 'Draw'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default StandingsStatsCard;

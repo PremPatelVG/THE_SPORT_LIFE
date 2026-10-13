@@ -1,0 +1,518 @@
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import toast from 'react-hot-toast';
+import { createTeam, clearError, clearSuccess } from '../store/slices/teamSlice';
+import { fetchTournaments } from '../store/slices/tournamentSlice';
+import { getSports } from '../services/sportService';
+import Navbar from '../components/Navbar';
+import {
+  ArrowLeft,
+  Users,
+  Trophy,
+  Image as ImageIcon,
+  AlertCircle,
+  CheckCircle,
+  Loader,
+  Info
+} from 'lucide-react';
+
+const CreateTeam = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const [searchParams] = useSearchParams();
+  const { loading, error, success } = useSelector((state) => state.team);
+  const { tournaments, loading: tournamentsLoading } = useSelector((state) => state.tournament);
+  const { user } = useSelector((state) => state.auth);
+
+  const tournamentIdFromUrl = searchParams.get('tournament_id');
+  
+  const [formData, setFormData] = useState({
+    name: '',
+    tournament_id: tournamentIdFromUrl || '',
+    description: '',
+    max_players: 11,
+    logo: '',
+    is_tournament_specific: tournamentIdFromUrl ? true : false,
+    sport_id: '',
+    is_public: false
+  });
+
+  const [errors, setErrors] = useState({});
+  const [sports, setSports] = useState([]);
+  const [loadingSports, setLoadingSports] = useState(false);
+
+  useEffect(() => {
+    // Fetch tournaments for team category
+    dispatch(fetchTournaments({ category: 'teams', status: 'open' }))
+      .unwrap()
+      .then((result) => {
+        console.log('CreateTeam: Tournaments fetched successfully:', result);
+      })
+      .catch((err) => {
+        console.error('CreateTeam: Error fetching tournaments:', err);
+      });
+
+    // Fetch sports list
+    const fetchSports = async () => {
+      setLoadingSports(true);
+      try {
+        const response = await getSports();
+        setSports(response.data || []);
+      } catch (error) {
+        console.error('Error fetching sports:', error);
+        toast.error('Failed to load sports');
+      } finally {
+        setLoadingSports(false);
+      }
+    };
+    fetchSports();
+  }, [dispatch]);
+
+  // Debug log when tournaments change
+  useEffect(() => {
+    console.log('CreateTeam: Tournaments state updated:', tournaments);
+    console.log('CreateTeam: Is array?', Array.isArray(tournaments));
+    console.log('CreateTeam: Length:', tournaments?.length);
+  }, [tournaments]);
+
+  useEffect(() => {
+    if (success) {
+      setTimeout(() => {
+        // If created from tournament page, redirect back to tournament
+        if (tournamentIdFromUrl) {
+          navigate(`/tournaments/${tournamentIdFromUrl}`);
+        } else {
+          navigate('/teams/my-teams');
+        }
+      }, 2000);
+    }
+  }, [success, navigate, tournamentIdFromUrl]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+      dispatch(clearSuccess());
+    };
+  }, [dispatch]);
+
+  const validateForm = () => {
+    const newErrors = {};
+
+    if (!formData.name.trim()) {
+      newErrors.name = 'Team name is required';
+    } else if (formData.name.length < 3) {
+      newErrors.name = 'Team name must be at least 3 characters';
+    }
+
+    if (formData.is_tournament_specific) {
+      if (!formData.tournament_id) {
+        newErrors.tournament_id = 'Please select a tournament';
+      }
+    } else {
+      if (!formData.sport_id) {
+        newErrors.sport_id = 'Please select a sport';
+      }
+    }
+
+    if (formData.max_players < 2) {
+      newErrors.max_players = 'Team must have at least 2 players';
+    } else if (formData.max_players > 50) {
+      newErrors.max_players = 'Maximum 50 players allowed';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    const newValue = type === 'checkbox' ? checked : value;
+    setFormData({ ...formData, [name]: newValue });
+    // Clear error for this field
+    if (errors[name]) {
+      setErrors({ ...errors, [name]: '' });
+    }
+  };
+
+  const handleTeamTypeToggle = (isTournamentSpecific) => {
+    setFormData({
+      ...formData,
+      is_tournament_specific: isTournamentSpecific,
+      tournament_id: isTournamentSpecific ? formData.tournament_id : '',
+      sport_id: !isTournamentSpecific ? formData.sport_id : ''
+    });
+    // Clear related errors
+    setErrors({
+      ...errors,
+      tournament_id: '',
+      sport_id: ''
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!validateForm()) {
+      toast.error('Please fix the errors in the form');
+      return;
+    }
+
+    // Create team with current user as captain
+    const teamData = {
+      name: formData.name,
+      description: formData.description,
+      logo: formData.logo,
+      max_players: parseInt(formData.max_players),
+      captain_id: user.id,
+      is_tournament_specific: formData.is_tournament_specific,
+      is_public: formData.is_public
+    };
+
+    // Add tournament_id or sport_id based on team type
+    if (formData.is_tournament_specific) {
+      teamData.tournament_id = parseInt(formData.tournament_id);
+    } else {
+      teamData.sport_id = parseInt(formData.sport_id);
+    }
+
+    const result = await dispatch(createTeam(teamData));
+    
+    if (createTeam.fulfilled.match(result)) {
+      toast.success('Team created successfully!');
+    } else if (createTeam.rejected.match(result)) {
+      const errorMessage = result.payload || result.error?.message || 'Failed to create team';
+      toast.error(errorMessage);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50">
+      {/* Navbar */}
+      <Navbar />
+      
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/teams')}
+              className="p-2 hover:bg-blue-50 rounded-xl transition-all duration-200 hover:scale-105 group"
+            >
+              <ArrowLeft className="w-5 h-5 text-gray-600 group-hover:text-blue-600 transition-colors" />
+            </button>
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-blue-700 bg-clip-text text-transparent">
+                Create Team
+              </h1>
+              <p className="text-sm text-gray-600">Build your team for tournament competition</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Success Message */}
+        {success && (
+          <div className="bg-emerald-50 border-l-4 border-emerald-500 text-emerald-700 px-4 py-3 rounded-lg mb-6 flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-semibold">{success}</p>
+              <p className="text-sm">Redirecting to your teams...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+            <span className="text-sm">{error}</span>
+          </div>
+        )}
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-lg p-8 border border-gray-100">
+          <div className="space-y-6">
+            {/* Team Name */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Team Name <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <Users className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                <input
+                  type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none ${
+                    errors.name ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="Enter team name"
+                />
+              </div>
+              {errors.name && (
+                <p className="mt-1 text-sm text-red-600">{errors.name}</p>
+              )}
+            </div>
+
+            {/* Team Type Selection */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-start gap-3 mb-4">
+                <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <h3 className="text-sm font-semibold text-blue-900 mb-1">Team Type</h3>
+                  <p className="text-xs text-blue-700">
+                    Choose whether this team is for a specific tournament or can be reused across multiple tournaments.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleTeamTypeToggle(true)}
+                  disabled={!!tournamentIdFromUrl}
+                  className={`p-4 rounded-lg border-2 transition-all ${
+                    formData.is_tournament_specific
+                      ? 'border-blue-600 bg-blue-100 text-blue-900'
+                      : 'border-gray-300 bg-white text-gray-700 hover:border-blue-300'
+                  } ${tournamentIdFromUrl ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <Trophy className="w-6 h-6 mx-auto mb-2" />
+                  <p className="text-sm font-semibold">Tournament-Based</p>
+                  <p className="text-xs mt-1 opacity-75">For one tournament only</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleTeamTypeToggle(false)}
+                  disabled={!!tournamentIdFromUrl}
+                  className={`p-4 rounded-lg border-2 transition-all ${
+                    !formData.is_tournament_specific
+                      ? 'border-emerald-600 bg-emerald-100 text-emerald-900'
+                      : 'border-gray-300 bg-white text-gray-700 hover:border-emerald-300'
+                  } ${tournamentIdFromUrl ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <Users className="w-6 h-6 mx-auto mb-2" />
+                  <p className="text-sm font-semibold">Reusable Team</p>
+                  <p className="text-xs mt-1 opacity-75">Use in multiple tournaments</p>
+                </button>
+              </div>
+            </div>
+
+            {/* Tournament Selection (Conditional) */}
+            {formData.is_tournament_specific && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Tournament <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Trophy className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                  <select
+                    name="tournament_id"
+                    value={formData.tournament_id}
+                    onChange={handleChange}
+                    disabled={tournamentsLoading}
+                    className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none appearance-none bg-white ${
+                      errors.tournament_id ? 'border-red-500' : 'border-gray-300'
+                    } ${tournamentsLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <option value="">
+                      {tournamentsLoading ? 'Loading tournaments...' : 'Select a tournament'}
+                    </option>
+                    {tournaments && tournaments.length > 0 ? (
+                      tournaments.map((tournament) => (
+                        <option key={tournament.id} value={tournament.id}>
+                          {tournament.name} - {tournament.sport_name}
+                        </option>
+                      ))
+                    ) : !tournamentsLoading ? (
+                      <option value="" disabled>No tournaments available</option>
+                    ) : null}
+                  </select>
+                </div>
+                {errors.tournament_id && (
+                  <p className="mt-1 text-sm text-red-600">{errors.tournament_id}</p>
+                )}
+                {!tournamentsLoading && tournaments && tournaments.length === 0 && (
+                  <div className="mt-2 bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 px-3 py-2 rounded text-sm">
+                    <AlertCircle className="w-4 h-4 inline mr-1" />
+                    No open team tournaments available. Please check back later or contact an admin.
+                  </div>
+                )}
+                <p className="mt-1 text-xs text-gray-500">Select the tournament this team will participate in</p>
+              </div>
+            )}
+
+            {/* Sport Selection (Conditional) */}
+            {!formData.is_tournament_specific && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Sport <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Trophy className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                  <select
+                    name="sport_id"
+                    value={formData.sport_id}
+                    onChange={handleChange}
+                    disabled={loadingSports}
+                    className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none appearance-none bg-white ${
+                      errors.sport_id ? 'border-red-500' : 'border-gray-300'
+                    } ${loadingSports ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <option value="">
+                      {loadingSports ? 'Loading sports...' : 'Select a sport'}
+                    </option>
+                    {sports.map((sport) => (
+                      <option key={sport.id} value={sport.id}>
+                        {sport.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {errors.sport_id && (
+                  <p className="mt-1 text-sm text-red-600">{errors.sport_id}</p>
+                )}
+                <p className="mt-1 text-xs text-gray-500">Select the sport type for this reusable team</p>
+              </div>
+            )}
+
+            {/* Team Visibility (Only for Reusable Teams) */}
+            {!formData.is_tournament_specific && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="is_public"
+                    checked={formData.is_public}
+                    onChange={handleChange}
+                    className="mt-1 w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                  />
+                  <div>
+                    <span className="text-sm font-semibold text-gray-900">Make team public</span>
+                    <p className="text-xs text-gray-600 mt-1">
+                      Public teams are visible to all users and can be joined by anyone. Private teams are only visible to invited members.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            )}
+
+            {/* Max Players */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Maximum Players
+              </label>
+              <input
+                type="number"
+                name="max_players"
+                value={formData.max_players}
+                onChange={handleChange}
+                min="2"
+                max="50"
+                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none ${
+                  errors.max_players ? 'border-red-500' : 'border-gray-300'
+                }`}
+              />
+              {errors.max_players && (
+                <p className="mt-1 text-sm text-red-600">{errors.max_players}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                Maximum number of players allowed in the team (2-50)
+              </p>
+            </div>
+
+            {/* Description */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Description (Optional)
+              </label>
+              <textarea
+                name="description"
+                value={formData.description}
+                onChange={handleChange}
+                rows={4}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none resize-none"
+                placeholder="Tell others about your team..."
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Optional description about your team's goals, playstyle, etc.
+              </p>
+            </div>
+
+            {/* Logo URL */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Team Logo URL (Optional)
+              </label>
+              <div className="relative">
+                <ImageIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                <input
+                  type="url"
+                  name="logo"
+                  value={formData.logo}
+                  onChange={handleChange}
+                  className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+                  placeholder="https://example.com/logo.png"
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                URL to your team's logo image
+              </p>
+            </div>
+
+            {/* Info Box */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex gap-3">
+                <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-blue-800">
+                  <p className="font-semibold mb-1">Team Creation Notes:</p>
+                  <ul className="list-disc list-inside space-y-1 text-blue-700">
+                    <li>You will be set as the team captain</li>
+                    <li>You can invite other players after creating the team</li>
+                    <li>Team members can be managed from the team detail page</li>
+                    <li>Only the creator can delete the team</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-4 mt-8">
+            <button
+              type="button"
+              onClick={() => navigate('/teams')}
+              className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-all"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader className="w-5 h-5 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Users className="w-5 h-5" />
+                  Create Team
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+export default CreateTeam;

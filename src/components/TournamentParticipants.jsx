@@ -1,0 +1,249 @@
+import { useState, useEffect } from 'react';
+import { Users, UserCheck, Shield, Trophy, Award } from 'lucide-react';
+import api from '../config/api';
+
+const TournamentParticipants = ({ tournamentId, category, winnerParticipantId }) => {
+  const [participants, setParticipants] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    loadParticipants();
+  }, [tournamentId]);
+
+  const loadParticipants = async () => {
+    try {
+      setLoading(true);
+      // console.log('Loading participants for tournament:', tournamentId, 'category:', category);
+      const response = await api.get(`/tournaments/${tournamentId}/participants`);
+      // console.log('Participants API response:', response.data);
+      // console.log('Participants array:', response.data.data);
+      // console.log('Participant count:', response.data.data);
+      // console.log('First participant:', response.data.data[0]);
+      
+      const participantsData = response.data.data || [];
+      const countData = response.data.data.length || 0;
+      
+      // console.log('Setting participants:', participantsData);
+      // console.log('Setting count:', countData);
+      // console.log('First participant structure:', JSON.stringify(participantsData[0], null, 2));
+      
+      setParticipants(participantsData);
+      setCount(countData);
+    } catch (error) {
+      console.error('Failed to load participants:', error);
+      console.error('Error details:', error.response?.data);
+      setParticipants([]);
+      setCount(0);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-xl shadow-lg p-6">
+        <div className="animate-pulse">
+          <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
+          <div className="space-y-3">
+            <div className="h-20 bg-gray-200 rounded"></div>
+            <div className="h-20 bg-gray-200 rounded"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (count === 0) {
+    return (
+      <div className="bg-white rounded-xl shadow-lg p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+          <Users className="w-6 h-6 text-primary-500" />
+          Participants ({count})
+        </h2>
+        <p className="text-gray-500 text-center py-8">
+          No participants locked yet
+        </p>
+      </div>
+    );
+  }
+
+  // Render based on category
+  if (category === 'singles') {
+    return (
+      <div className="bg-white rounded-xl shadow-lg p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+          <Users className="w-6 h-6 text-primary-500" />
+          Participants ({count} Players)
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {participants && participants.length > 0 && participants.map((player, index) => {
+            const isWinner = winnerParticipantId && player.registration_id === winnerParticipantId;
+            return (
+              <div key={player.user_id} className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${
+                isWinner ? 'border-2 border-yellow-400 bg-yellow-50' : ''
+              }`}>
+                <div className="flex items-start gap-3">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${
+                    isWinner ? 'bg-gradient-to-br from-yellow-400 to-amber-500 text-white' : 'bg-primary-100 text-primary-600'
+                  }`}>
+                    {isWinner ? <Trophy className="w-6 h-6" /> : index + 1}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-gray-900">
+                        {player.first_name} {player.last_name}
+                      </h3>
+                      {isWinner && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded-full">
+                          <Trophy className="w-3 h-3" />
+                          WINNER
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-600">{player.phone}</p>
+                    {player.sport_name && player.skill_level && (
+                      <span className="inline-block mt-2 text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full font-medium">
+                        {player.sport_name} - {player.skill_level}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (category === 'doubles') {
+    return (
+      <div className="bg-white rounded-xl shadow-lg p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+          <Users className="w-6 h-6 text-primary-500" />
+          Participants ({count} Pairs)
+        </h2>
+        <div className="space-y-4">
+          {participants && participants.length > 0 && participants.map((pair, index) => {
+            const isWinner = winnerParticipantId && pair.pair_id === winnerParticipantId;
+            return (
+              <div key={pair.pair_id} className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${
+                isWinner ? 'border-2 border-yellow-400 bg-yellow-50' : ''
+              }`}>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
+                    isWinner ? 'bg-gradient-to-br from-yellow-400 to-amber-500 text-white' : 'bg-purple-100 text-purple-700'
+                  }`}>
+                    {isWinner ? <Trophy className="w-4 h-4" /> : index + 1}
+                  </div>
+                  <h3 className="font-bold text-gray-900 text-lg">
+                    {pair.pair_name || `Pair ${index + 1}`}
+                  </h3>
+                  {isWinner && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-bold rounded-full">
+                      <Trophy className="w-3 h-3" />
+                      WINNER
+                    </span>
+                  )}
+                </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 ml-10">
+                {/* Player 1 */}
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <UserCheck className="w-5 h-5 text-primary-500 mt-1" />
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      {pair.player1_first_name} {pair.player1_last_name}
+                    </p>
+                    <p className="text-sm text-gray-600">{pair.player1_phone}</p>
+                    {pair.player1_skill_level && (
+                      <span className="inline-block mt-1 text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-medium">
+                        {pair.player1_skill_level}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Player 2 */}
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <UserCheck className="w-5 h-5 text-primary-500 mt-1" />
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      {pair.player2_first_name} {pair.player2_last_name}
+                    </p>
+                    <p className="text-sm text-gray-600">{pair.player2_phone}</p>
+                    {pair.player2_skill_level && (
+                      <span className="inline-block mt-1 text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-medium">
+                        {pair.player2_skill_level}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (category === 'teams') {
+    return (
+      <div className="bg-white rounded-xl shadow-lg p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+          <Users className="w-6 h-6 text-primary-500" />
+          Participants
+        </h2>
+        <div className="space-y-3">
+          {participants && participants.length > 0 && participants.map((team, index) => {
+            const isWinner = winnerParticipantId && team.team_id === winnerParticipantId;
+            return (
+              <div key={team.team_id} className={`flex items-center justify-between p-4 rounded-lg hover:shadow-md transition-shadow ${
+                isWinner ? 'border-2 border-yellow-400 bg-yellow-50' : 'bg-gray-50 border border-gray-200'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
+                    isWinner ? 'bg-gradient-to-br from-yellow-400 to-amber-500 text-white' : 'bg-primary-500 text-white'
+                  }`}>
+                    {isWinner ? <Trophy className="w-6 h-6" /> : <Users className="w-6 h-6" />}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-gray-900">
+                        {team.team_name}
+                      </h3>
+                      {isWinner && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded-full">
+                          <Trophy className="w-3 h-3" />
+                          WINNER
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500">{team.member_count} members</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isWinner && (
+                    <span className="inline-flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-yellow-400 to-amber-500 text-white rounded-full text-xs font-bold shadow-md">
+                      <Award className="w-4 h-4" />
+                      CHAMPION
+                    </span>
+                  )}
+                  <span className="px-3 py-1 bg-primary-100 text-primary-600 rounded-full text-xs font-semibold">
+                    Locked
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+};
+
+export default TournamentParticipants;
